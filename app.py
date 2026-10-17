@@ -6,7 +6,7 @@ import gradio as gr
 from PIL import Image
 from io import BytesIO
 
-GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
+GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY",AIzaSyD1bK_EuTZ2dLBsoYQ-l6Ah7BZ7U-LiE6c "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
