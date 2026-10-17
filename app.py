@@ -1,188 +1,129 @@
+
 import os
-import json
 import base64
-import requests
-import gradio as gr
-from PIL import Image
 from io import BytesIO
 
-GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY",AIzaSyD1bK_EuTZ2dLBsoYQ-l6Ah7BZ7U-LiE6c "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+import gradio as gr
+import requests
+from PIL import Image
+
+API_KEY = os.getenv("GEMINI_API_KEY", "")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
-def eseri_incele(image):
-    if image is None:
-        return "Önce bir eser fotoğrafı yükle.", "", "", ""
+def eseri_incele(image_path):
+    if not image_path:
+        return "Önce bir fotoğraf yükle."
 
-    if not GOOGLE_VISION_API_KEY or not GEMINI_API_KEY:
-        return (
-            "API anahtarları henüz ayarlanmamış. Render ayarlarına eklemelisin.",
-            "", "", ""
-        )
+    if not API_KEY:
+        return "HATA: Render ayarlarında GEMINI_API_KEY bulunamadı."
 
     try:
-        # Fotoğrafı JPEG formatına dönüştür
-        img = Image.open(image).convert("RGB")
-        img.thumbnail((1200, 1200))
+        image = Image.open(image_path).convert("RGB")
+        image.thumbnail((1200, 1200))
 
         buffer = BytesIO()
-        img.save(buffer, format="JPEG", quality=90)
-        image_bytes = buffer.getvalue()
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        image.save(buffer, format="JPEG", quality=85)
 
-        # Google Vision ile benzer internet sonuçlarını ara
-        vision_url = (
-            "https://vision.googleapis.com/v1/images:annotate"
-            f"?key={GOOGLE_VISION_API_KEY}"
-        )
+        encoded_image = base64.b64encode(
+            buffer.getvalue()
+        ).decode("utf-8")
 
-        vision_payload = {
-            "requests": [{
-                "image": {"content": image_b64},
-                "features": [
-                    {"type": "WEB_DETECTION", "maxResults": 10},
-                    {"type": "LABEL_DETECTION", "maxResults": 10}
-                ]
-            }]
-        }
+        prompt = """
+Sen tarih, arkeoloji ve sanat tarihi alanlarında yardımcı
+olan bir araştırma asistanısın.
 
-        vr = requests.post(
-            vision_url, json=vision_payload, timeout=45
-        )
-        vr.raise_for_status()
-        vision_data = vr.json()["responses"][0]
+Fotoğraftaki nesneyi dikkatlice incele ve Türkçe cevap ver.
 
-        if "error" in vision_data:
-            raise Exception(vision_data["error"].get("message", "Vision hatası"))
-
-        web = vision_data.get("webDetection", {})
-        entities = [
-            item.get("description", "")
-            for item in web.get("webEntities", [])
-            if item.get("description")
-        ]
-
-        labels = [
-            item.get("description", "")
-            for item in vision_data.get("labelAnnotations", [])
-            if item.get("description")
-        ]
-
-        pages = [
-            {
-                "title": p.get("pageTitle", "Başlıksız sayfa"),
-                "url": p.get("url", "")
-            }
-            for p in web.get("pagesWithMatchingImages", [])
-            if p.get("url")
-        ][:8]
-
-        visual_references = (
-            "Görsel etiketleri: " + ", ".join(labels[:10]) + "\n"
-            "Benzer web varlıkları: " + ", ".join(entities[:10]) + "\n"
-            "Benzer görsellerin bulunduğu sayfalar:\n"
-            + "\n".join(
-                f"- {p['title']}: {p['url']}" for p in pages
-            )
-        )
-
-        # Gemini'ye fotoğrafı ve web bulgularını gönder
-        prompt = f"""
-Sen arkeoloji ve sanat tarihi konusunda yardımcı olan
-bir araştırma asistanısın.
-
-Fotoğrafı dikkatle incele. Google Vision sonuçlarını da
-yardımcı kanıt olarak kullan:
-
-{visual_references}
-
-Türkçe yanıt ver ve aşağıdaki başlıkları kullan:
-
-1. ESERİN OLASI ADI
-2. TANIM VE GÖRSEL ÖZELLİKLER
-3. TAHMİNİ DÖNEM VE TARİH
-4. KÖKEN VE KÜLTÜR
-5. TARİHSEL VE ARKEOLOJİK ÖNEM
-6. BELİRSİZLİKLER VE DOĞRULAMA
+Şu başlıkları kullan:
+1. Eserin olası adı
+2. Görsel özellikleri ve malzemesi
+3. Tahmini tarih ve dönem
+4. Olası kökeni ve kültürü
+5. Tarihî önemi
+6. Benzer eserlerle karşılaştırma
+7. Sonucu doğrulamak için araştırma önerileri
 
 Önemli kurallar:
-- Yalnızca fotoğrafa bakarak kesin kimlik iddiasında bulunma.
-- Benzerlik sonuçlarını doğrulanmış kimlik gibi sunma.
-- Bilinmeyen tarih, kültür, kazı yeri veya müze bilgilerini uydurma.
-- Kanıt yetersizse bunu açıkça söyle.
-- Fotoğraftaki nesnenin eser olmayabileceğini de değerlendir.
-- Web sonuçlarının bağlantılarını kaynaklar bölümünde ayrıca ver.
-- Güvenilir kaynaklar ile yalnızca benzer görsel içeren sayfaları ayır.
+- Emin değilsen kesin konuşma.
+- Fotoğraftan anlaşılamayan bilgileri uydurma.
+- Kaynak veya bağlantı uydurma.
+- Birden fazla ihtimal varsa açıkla.
+- Nesnenin tarihî eser olmayabileceğini de değerlendir.
+- Tahminlerini doğrulanmış bilgilerden ayır.
 """
 
-        gemini_url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_MODEL}:generateContent"
-            f"?key={GEMINI_API_KEY}"
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            "v1beta/models/"
+            + MODEL
+            + ":generateContent"
         )
 
-        gemini_payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": image_b64
+        response = requests.post(
+            url,
+            params={"key": API_KEY},
+            json={
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": encoded_image
+                            }
                         }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 2500
-            }
-        }
-
-        grr = requests.post(
-            gemini_url, json=gemini_payload, timeout=90
-        )
-        grr.raise_for_status()
-        result = grr.json()
-
-        answer = result["candidates"][0]["content"]["parts"][0]["text"]
-
-        source_text = "## Google Vision bulguları\n\n"
-        source_text += "**Görsel etiketleri:** " + (
-            ", ".join(labels) if labels else "Sonuç bulunamadı."
-        )
-        source_text += "\n\n**Benzer web varlıkları:** " + (
-            ", ".join(entities) if entities else "Sonuç bulunamadı."
-        )
-        source_text += "\n\n## İncelenebilecek bağlantılar\n\n"
-
-        if pages:
-            for p in pages:
-                source_text += f"- [{p['title']}]({p['url']})\n"
-        else:
-            source_text += "Benzer görseller için sayfa bulunamadı.\n"
-
-        source_text += (
-            "\n**Not:** Bu bağlantılar eserin kimliğini tek başına "
-            "kanıtlamaz. Bilgileri güvenilir müze ve akademik "
-            "kaynaklardan doğrulamak gerekir."
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 2000
+                }
+            },
+            timeout=90
         )
 
-        return answer, answer, answer, source_text
+        if response.status_code != 200:
+            try:
+                error = response.json()["error"]["message"]
+            except Exception:
+                error = response.text[:500]
 
-    except requests.exceptions.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.response.text[:800]
-        except Exception:
-            pass
-        msg = f"API isteği başarısız oldu: {e}\n{detail}"
-        return msg, "", "", ""
+            return (
+                f"API HATASI ({response.status_code})\n\n"
+                f"{error}"
+            )
 
-    except Exception as e:
-        msg = f"İnceleme sırasında hata oluştu: {e}"
-        return msg, "", "", ""
+        data = response.json()
+        candidates = data.get("candidates", [])
+
+        if not candidates:
+            return "Yapay zekâ yanıt oluşturamadı. Başka bir fotoğraf dene."
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+
+        answer = "\n\n".join(
+            part["text"]
+            for part in parts
+            if "text" in part
+        )
+
+        if not answer:
+            return "Yanıt boş geldi. Lütfen tekrar dene."
+
+        return (
+            "# 🏺 ESER ANALİZİ\n\n"
+            + answer
+            + "\n\n---\n"
+            + "*Bu sonuç yapay zekâ değerlendirmesidir. "
+              "Kesin tespit için güvenilir kaynaklardan doğrulama yap.*"
+        )
+
+    except requests.exceptions.Timeout:
+        return "İstek zaman aşımına uğradı. Tekrar dene."
+
+    except Exception as error:
+        return f"Beklenmeyen hata: {str(error)}"
 
 
 with gr.Blocks(
@@ -195,42 +136,36 @@ with gr.Blocks(
 
     gr.Markdown("""
     # 🏺 TARİHÎ ESER ASİSTANI
-    ### Fotoğraf yükle, olası kimliğini ve tarihsel bağlamını araştır.
+    ### Geçmişin izlerini fotoğraflarla keşfet.
 
-    *Yapay zekâ sonuçları araştırma amaçlıdır; uzman doğrulamasının
-    yerini tutmaz.*
+    Bir eser fotoğrafı yükle. Yapay zekâ olası kimliğini,
+    dönemini ve tarihî önemini değerlendirsin.
     """)
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            photo = gr.Image(
-                type="filepath",
-                label="Eser fotoğrafı",
-                height=350
-            )
-            analyze = gr.Button(
-                "🔎 ESERİ İNCELE",
-                variant="primary"
-            )
-
-        with gr.Column(scale=2):
-            overview = gr.Markdown(
-                label="İnceleme sonucu"
-            )
-
-    with gr.Tabs():
-        with gr.Tab("Genel Bakış"):
-            general = gr.Markdown()
-        with gr.Tab("Tarih ve Arkeoloji"):
-            archaeology = gr.Markdown()
-        with gr.Tab("Kaynaklar"):
-            sources = gr.Markdown()
-
-    analyze.click(
-        fn=eseri_incele,
-        inputs=[photo],
-        outputs=[overview, general, archaeology, sources]
+    photo = gr.Image(
+        type="filepath",
+        label="Eser fotoğrafını yükle",
+        height=350
     )
+
+    button = gr.Button(
+        "🔎 ESERİ İNCELE",
+        variant="primary"
+    )
+
+    result = gr.Markdown(label="Analiz sonucu")
+
+    button.click(
+        fn=eseri_incele,
+        inputs=photo,
+        outputs=result
+    )
+
+    gr.Markdown("""
+    ---
+    **Bilgilendirme:** Sonuçlar kesin arkeolojik tespit değildir.
+    Bu uygulama tek başına canlı internet araştırması yapmaz.
+    """)
 
 demo.launch(
     server_name="0.0.0.0",
