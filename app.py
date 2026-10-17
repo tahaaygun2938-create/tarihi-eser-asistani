@@ -19,7 +19,13 @@ def eseri_incele(image_path):
         return "HATA: Render ayarlarında GEMINI_API_KEY bulunamadı."
 
     try:
-        image = Image.open(image_path).convert("RGB")
+        if isinstance(image_path, dict):
+    image_path = image_path.get("path")
+
+if not image_path or not os.path.exists(image_path):
+    return "Fotoğraf dosyası bulunamadı. Lütfen fotoğrafı yeniden yükle."
+
+image = Image.open(image_path).convert("RGB")
         image.thumbnail((1200, 1200))
 
         buffer = BytesIO()
