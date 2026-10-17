@@ -132,46 +132,140 @@ Fotoğraftaki nesneyi dikkatlice incele ve Türkçe cevap ver.
         return f"Beklenmeyen hata: {str(error)}"
 
 
+
 with gr.Blocks(
-    theme=gr.themes.Soft(
+    theme=gr.themes.Base(
         primary_hue="amber",
+        secondary_hue="amber",
         neutral_hue="slate"
     ),
-    title="Tarihî Eser Asistanı"
+    css="""
+    body, .gradio-container {
+        background: #101114 !important;
+        color: #f2eadb !important;
+    }
+
+    .gradio-container {
+        max-width: 1100px !important;
+        margin: auto !important;
+    }
+
+    #hero {
+        text-align: center;
+        padding: 35px 15px 25px;
+        border-bottom: 1px solid #554326;
+        margin-bottom: 24px;
+    }
+
+    #hero h1 {
+        color: #d9b56d;
+        font-size: 42px;
+        letter-spacing: 3px;
+        margin-bottom: 10px;
+    }
+
+    #hero p {
+        color: #c2b9a8;
+        font-size: 16px;
+    }
+
+    #upload-panel {
+        border: 1px solid #725a32;
+        border-radius: 16px;
+        padding: 18px;
+        background: #191a1f;
+    }
+
+    #analyze {
+        background: linear-gradient(90deg, #8e672b, #d9b56d);
+        color: #111111;
+        border: none;
+        border-radius: 10px;
+        font-weight: bold;
+        min-height: 52px;
+        font-size: 16px;
+    }
+
+    #result-panel {
+        border: 1px solid #554326;
+        border-radius: 16px;
+        padding: 20px;
+        background: #17181c;
+        line-height: 1.8;
+    }
+
+    footer {
+        visibility: hidden;
+    }
+    """,
+    title="HERITAGE AI | Tarihî Eser Asistanı"
 ) as demo:
 
-    gr.Markdown("""
-    # 🏺 TARİHÎ ESER ASİSTANI
-    ### Geçmişin izlerini fotoğraflarla keşfet.
-
-    Bir eser fotoğrafı yükle. Yapay zekâ olası kimliğini,
-    dönemini ve tarihî önemini değerlendirsin.
+    gr.HTML("""
+    <div id="hero">
+        <div style="color:#d9b56d;font-size:14px;
+                    letter-spacing:5px;margin-bottom:12px;">
+            HERITAGE AI
+        </div>
+        <h1>GEÇMİŞİ KEŞFET</h1>
+        <p>
+            Tarihî eserleri yapay zekâ ile incele.
+            Geçmişin izlerini fotoğraflarla keşfet.
+        </p>
+        <div style="color:#8e7852;font-size:12px;
+                    letter-spacing:2px;margin-top:18px;">
+            TARİH • ARKEOLOJİ • KÜLTÜREL MİRAS
+        </div>
+    </div>
     """)
 
-    photo = gr.Image(
-        type="filepath",
-        label="Eser fotoğrafını yükle",
-        height=350
-    )
+    with gr.Row():
+        with gr.Column(scale=1, elem_id="upload-panel"):
+            gr.Markdown("## 🏺 Eserini tanıt")
+            gr.Markdown(
+                "İncelemek istediğin eserin fotoğrafını yükle."
+            )
 
-    button = gr.Button(
-        "🔎 ESERİ İNCELE",
-        variant="primary"
-    )
+            photo = gr.Image(
+                type="filepath",
+                label="ESER FOTOĞRAFI",
+                height=320
+            )
 
-    result = gr.Markdown(label="Analiz sonucu")
+            button = gr.Button(
+                "⌕  ESERİ İNCELE",
+                variant="primary",
+                elem_id="analyze"
+            )
+
+            gr.Markdown(
+                "*Daha iyi sonuçlar için eserin net ve "
+                "aydınlık bir fotoğrafını kullan.*"
+            )
+
+        with gr.Column(scale=1, elem_id="result-panel"):
+            gr.Markdown("## 📜 Eser analizi")
+            result = gr.Markdown(
+                "Fotoğrafını yükle ve **Eseri İncele** "
+                "düğmesine bas. Analiz burada görünecek."
+            )
+
+    gr.Markdown("""
+    ---
+    <div style="text-align:center;color:#a69b87;">
+        HERITAGE AI · TARİHÎ ESER ARAŞTIRMA PLATFORMU
+
+        <br><br>
+        Yapay zekâ sonuçları tahmin içerebilir.
+        Kesin tarih ve kimlik için güvenilir kaynaklardan doğrulama yap.
+    </div>
+    """)
 
     button.click(
         fn=eseri_incele,
         inputs=photo,
         outputs=result
     )
-
-    gr.Markdown("""
-    ---
-    **Bilgilendirme:** Sonuçlar kesin arkeolojik tespit değildir.
-    Bu uygulama tek başına canlı internet araştırması yapmaz.
-    """)
 
 demo.launch(
     server_name="0.0.0.0",
