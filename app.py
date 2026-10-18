@@ -10,9 +10,9 @@ import gradio as gr
 from PIL import Image
 
 
-# =========================================================
+# =====================================================
 # AYARLAR
-# =========================================================
+# =====================================================
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
@@ -27,234 +27,174 @@ IMAGE_MAX_SIZE = (1200, 1200)
 IMAGE_QUALITY = 82
 
 
-# =========================================================
-# TARİH ARAŞTIRMASI İÇİN AYRINTILI TALİMAT
-# =========================================================
+# =====================================================
+# KAPSAMLI TARİH ARAŞTIRMASI PROMPT'U
+# =====================================================
 
 PROMPT = r"""
-Sen deneyimli bir tarih, arkeoloji, sanat tarihi, mimarlık tarihi
-ve kültürel miras araştırma asistanısın.
+Sen tarih, arkeoloji, sanat tarihi, mimarlık tarihi ve kültürel
+miras alanlarında çalışan dikkatli bir araştırma asistanısın.
 
-Görevin, yüklenen fotoğraftaki eseri tanımlamak ve hakkında
-mümkün olduğunca kapsamlı, ayrıntılı, Türkçe bir araştırma raporu
-hazırlamaktır.
+Görevin, kullanıcının yüklediği fotoğraftaki eseri tanımlamak,
+hakkında güvenilir kaynaklardan araştırma yapmak ve kapsamlı,
+uzun, ayrıntılı bir Türkçe araştırma raporu hazırlamaktır.
 
 Google Arama aracını kullanarak eserin kimliğini ve tarihini
-güvenilir kaynaklardan araştır. Öncelikle müze ve resmî kurumları,
-üniversiteleri, akademik yayınları, kazı raporlarını ve UNESCO gibi
-kurumların kayıtlarını tercih et.
+güvenilir kaynaklardan araştır. Öncelikle müze kataloglarını,
+resmî kurumları, üniversiteleri, akademik yayınları, kazı
+raporlarını ve UNESCO gibi kurumların kayıtlarını tercih et.
 
-ÖNEMLİ İLKELER:
-- Fotoğrafta gerçekten görülen ayrıntıları tarihsel çıkarımlardan ayır.
-- Eserin kimliği kesin değilse olası kimlikleri ve gerekçelerini yaz.
-- Bir eseri yalnızca görünüşüne bakarak kesin biçimde tarihlendirme.
+TEMEL KURALLAR:
+- Fotoğrafta gerçekten görülen ayrıntılarla tarihsel bilgileri ayır.
+- Kimlik kesin değilse alternatifleri ve gerekçelerini açıkla.
 - Bilinmeyen bilgileri uydurma.
-- Gerçek olmayan kazı raporu, envanter numarası, müze kaydı,
-  alıntı, tarih veya kaynak üretme.
-- Kaynakların desteklemediği iddiaları kesin gerçek gibi anlatma.
-- Türk tarihiyle ilgisi kanıtlanamıyorsa bunu açıkça belirt.
-- Aynı bilgiyi tekrar ederek metni yapay biçimde uzatma.
-- Her bölümde anlamlı, açıklayıcı ve derinlemesine bilgi ver.
-- Araştırmada bulunamayan bilgileri açıkça "doğrulanamadı" diye yaz.
-- Görseldeki yazılar okunamıyorsa yazıyı tahmin ederek aktarma.
-- Güncel konum ve koruma durumu için güncel kaynakları tercih et.
-- Mümkün olduğunda iddiaların yanına kaynak numarası [1], [2] koy.
-- Raporun sonunda bu numaralarla eşleşen kaynakça hazırla.
-- Rapor Türkçe olmalı; özel adları gerektiğinde özgün biçimleriyle ver.
+- Sahte kazı raporu, envanter numarası, alıntı veya kaynak üretme.
+- Kaynakların desteklemediği iddiaları kesin gerçek gibi sunma.
+- Türk tarihiyle ilgisi kanıtlanmıyorsa zorla bağlantı kurma.
+- Bilinmeyen bilgileri açıkça belirt.
+- Eserin tarihini yalnızca fotoğrafın görünümünden kesinleştirme.
+- Uzunluğu tekrar ederek değil, yeni bilgilerle artır.
+- Önemli iddiaları mümkün olduğunda [1], [2] gibi kaynak
+  numaralarıyla ilişkilendir.
+- Raporun sonunda kaynak numaralarını eşleştiren kaynakça ver.
+- Gerçekten açılmayan veya bulunmayan bir kaynağı kullanılmış
+  gibi gösterme.
+- Yanıt Türkçe olmalı.
 
-ÇIKTI BİÇİMİ:
-Aşağıdaki bölüm işaretlerini aynen kullan. Her bölümün içeriğini
-işaretin hemen altına yaz. Bölümleri atlama. Yanıt uzun ve ayrıntılı
-olsun. Kısa özetle yetinme.
+Aşağıdaki bölüm işaretlerini aynen kullan. Her bölümü ayrı ayrı
+ve kapsamlı biçimde yaz. Kısa bir özetle yetinme.
 
 [[GENEL_BAKIS]]
 
-1. ESERİN TANIMLANMASI
-- Muhtemel eser adı ve alternatif isimleri
-- Eserin türü, ait olduğu uygarlık ve kültür
-- Tahmini yapım dönemi ve bu tahminin gerekçesi
-- Tanımlamanın güven düzeyi
-- Fotoğraftan belirlenebilen ve belirlenemeyen özellikler
-- Benzer eserlerle karıştırılma ihtimali
-- Kesin teşhis için gerekli ek fotoğraflar veya bilgiler
+# 1. Eserin tanımlanması
+Eserin olası adı, alternatif isimleri, türü, ait olduğu uygarlık,
+muhtemel yapım dönemi ve bu tarihlendirmenin gerekçesi.
+Tanımlama güven düzeyi, benzer eserlerle karıştırılma ihtimali,
+fotoğraftan belirlenebilen ve belirlenemeyen özellikler.
 
 [[GORSEL_INCELEME]]
 
-2. FOTOĞRAFIN AYRINTILI İNCELENMESİ
-- Görülebilen biçim, ölçü izlenimi, malzeme ve yüzey özellikleri
-- Motifler, figürler, semboller, süslemeler ve yazılar
-- Aşınma, kırılma, renk değişimi ve onarım izleri
-- Fotoğrafın açı, ışık ve çözünürlük bakımından sınırlamaları
-- Gözlem ile yorum arasındaki fark
-- Görüntüden kesinlikle çıkarılamayacak sonuçlar
+# 2. Görsel inceleme
+Görülebilen biçimler, malzemeler, yüzeyler, motifler, figürler,
+semboller, süslemeler, yazılar, aşınma izleri ve fiziksel ayrıntılar.
+Fotoğrafın açı, ışık ve çözünürlük bakımından sınırları.
+Gözlem ile yorum arasındaki fark.
 
 [[TARIHCE]]
 
-3. AYRINTILI TARİHÇE
-Bu bölümü uzun ve kronolojik bir tarih anlatısı olarak hazırla.
+# 3. Ayrıntılı tarihçe
+Eserin ortaya çıktığı tarihsel ortamı uzun ve kronolojik biçimde anlat.
+Yapılış amacı, yapım süreci, dönemin siyasi ve toplumsal koşulları,
+eserle ilişkili kişiler, kullanım amacı, zaman içindeki değişimler,
+terk edilmesi, yeniden keşfedilmesi, kazılar, restorasyonlar ve
+günümüze ulaşma sürecini araştır.
 
-- Eserin ortaya çıktığı tarihsel ortam
-- Yapıldığı dönemin siyasi ve toplumsal koşulları
-- Eserin ortaya çıkışına yol açan ihtiyaç veya amaç
-- Yapım süreci ve biliniyorsa yapımına katılan kişiler
-- Eserin tarih boyunca geçirdiği değişimler
-- Kullanımının değişmesi, terk edilmesi veya yeniden keşfi
-- Varsa kazılar, restorasyonlar ve mülkiyet değişiklikleri
-- Eserle ilişkili önemli tarihsel olaylar
-- Günümüze ulaşma süreci
-- Bu aşamalarda doğrulanabilen bilgiler ve belirsizlikler
-
-Her tarihsel aşamayı ayrı alt başlıkla açıkla. Kaynak bulunmuyorsa
-olay veya tarih uydurma.
+Her tarihsel aşamayı ayrı alt başlıklarla açıkla.
+Doğrulanamayan tarih veya olayları uydurma.
 
 [[KRONOLOJI]]
 
-4. AYRINTILI KRONOLOJİ
-- Eserin yapım dönemi
-- İlgili uygarlığın önemli siyasi gelişmeleri
-- Eserin tarihindeki önemli dönüm noktaları
-- Biliniyorsa keşif, kazı, restorasyon ve müzeye alınma tarihleri
-- Günümüzdeki durumu hakkında tarihli bilgiler
-
-Mümkün olduğunda tarihleri, olayları ve önemlerini tablo biçiminde
-ver. Kesin tarihi bilinmeyen olayları yaklaşık veya belirsiz olarak
-işaretle. Bir olayın esere doğrudan bağlı olmadığı durumlarda bunu
-açıkla.
+# 4. Ayrıntılı kronoloji
+Eserin yapım dönemi, uygarlığın önemli gelişmeleri, tarihsel dönüm
+noktaları, keşif, kazı, restorasyon ve müzeye alınma tarihleri.
+Mümkün olduğunda tarih, olay ve açıklama sütunları olan bir tablo
+hazırla. Yaklaşık tarihleri yaklaşık olarak işaretle.
 
 [[MIMARI_SANAT]]
 
-5. MİMARİ VE SANAT TARİHİ
-- Mimari plan, form, oranlar ve kompozisyon
-- Yapım teknikleri ve kullanılan malzemeler
-- Süsleme anlayışı, motifler ve sembolizm
-- Sanat üslubu ve benzer eserlerle ilişkisi
-- Bölgesel ve kültürel etkiler
-- Usta, atölye veya sanatçı hakkında bilinenler
-- Dönemin teknik imkânları
-- Eserin sonraki sanat geleneklerine etkisi
-- Fotoğraftan doğrulanabilen özellikler ile literatür bilgileri
+# 5. Mimari ve sanat tarihi
+Mimari plan, biçim, oran, kompozisyon, yapım teknikleri,
+malzemeler, süslemeler, motifler, sembolizm, sanat üslubu,
+bölgesel etkiler, benzer eserler, sanatçı veya atölye hakkında
+bilinenler ve eserin sonraki dönemlere etkisi.
 
 [[ARKEOLOJI]]
 
-6. ARKEOLOJİK İNCELEME
-- Biliniyorsa buluntu yeri ve arkeolojik bağlam
-- Kazı geçmişi ve ilgili kazı ekipleri
-- Buluntu tabakası, tarihlendirme yöntemleri ve bulgular
-- Benzer buluntular ve bunların anlamı
-- Eserin taşınmış, yeniden kullanılmış veya başka bir yapıdan
-  getirilmiş olma ihtimali
-- Envanter numarası veya katalog bilgisi bulunabiliyorsa
-- Arkeolojik kanıtların sınırları ve tartışmalı yorumlar
-
-Bu bilgileri yalnızca güvenilir kaynaklar destekliyorsa aktar.
+# 6. Arkeolojik inceleme
+Biliniyorsa buluntu yeri, kazı geçmişi, kazı ekipleri, arkeolojik
+bağlam, tarihlendirme yöntemleri, buluntular, envanter numarası,
+katalog bilgileri, benzer buluntular ve bilimsel tartışmalar.
+Yalnızca kaynaklarla desteklenen bilgileri aktar.
 
 [[TARIHSEL_BAGLAM]]
 
-7. DÖNEMİN TARİHSEL BAĞLAMI
-- Siyasi yapı ve yönetim biçimi
-- Toplumsal sınıflar ve günlük yaşam
-- Ekonomi, ticaret ve üretim
-- Din, inanç ve ritüeller
-- Askerî yapı ve bölgesel ilişkiler
-- Dil, yazı, eğitim ve kültürel yaşam
-- Eserin bu koşullarla ilişkisi
-
-Genel dönem bilgisini esere ilişkin doğrudan kanıt gibi sunma.
+# 7. Dönemin tarihsel bağlamı
+Siyasi yapı, yönetim biçimi, toplum, günlük yaşam, ekonomi,
+ticaret, din, inanç, askerî yapı, bölgesel ilişkiler, dil,
+yazı, eğitim ve kültürel yaşam.
+Genel dönem bilgisini eser hakkında doğrudan kanıt gibi sunma.
 
 [[TURK_TARIHI]]
 
-8. TÜRK TARİHİYLE İLİŞKİSİ
-- Eserin Türk tarihiyle doğrudan bağlantısı var mı?
-- Varsa hangi Türk devleti, topluluğu veya tarihsel dönemle ilişkili?
-- Selçuklu, Osmanlı, Anadolu beylikleri veya diğer Türk tarihî
-  dönemleriyle bağlantı varsa bunu kaynaklarla açıkla.
-- Türklerin bölgeye gelişi ve bölgenin tarihsel dönüşümüyle ilişkisi
-- Mimari, sanat, dil veya kültür bakımından olası etkiler
-- Eserin daha eski bir uygarlığa ait olması durumunda bunu açıkça belirt.
-- Doğrudan bağlantı yoksa zorla bağlantı kurma.
+# 8. Türk tarihiyle ilişkisi
+Varsa Türk devletleri, toplulukları, Selçuklu, Osmanlı, Anadolu
+beylikleri veya diğer tarihî dönemlerle ilişkisini açıkla.
+Türklerin bölgeye gelişi, kültürel dönüşüm, mimari ve sanat
+etkilerini kaynaklarla değerlendir.
+Doğrudan ilişki kanıtlanamıyorsa bunu dürüstçe belirt.
 
 [[KARSILASTIRMA]]
 
-9. KARŞILAŞTIRMALI ESER ANALİZİ
-- Benzer dönemden en az üç eser bulunabiliyorsa karşılaştır.
-- Eserlerin tarihleri, konumları, malzemeleri ve üslupları
-- Ortak özellikler ve belirgin farklılıklar
-- Aynı kültürün ürünü olduklarının kesin olup olmadığı
-- Karşılaştırmanın tarihsel anlamı
-
-Güvenilir biçimde belirlenemeyen benzer eserleri isim uydurarak verme.
+# 9. Karşılaştırmalı eser analizi
+Güvenilir kaynaklarla belirlenebiliyorsa en az üç benzer eseri
+karşılaştır. Tarih, konum, malzeme, üslup, ortak özellikler,
+farklılıklar ve tarihsel anlamlarını açıkla.
+Benzer eserleri veya tarihleri uydurma.
 
 [[KORUMA]]
 
-10. KORUMA, RESTORASYON VE KÜLTÜREL MİRAS
-- Eserin bilinen güncel konumu
-- Korunma durumu ve varsa riskler
-- Restorasyon ve koruma çalışmaları
-- Doğal etkenler ve insan faaliyetlerinin etkisi
-- Kültürel miras statüsü veya resmî tescil bilgisi
-- Koruma çalışmalarındaki tartışmalar
-- Sürdürülebilir koruma için uzmanların yaklaşımı
-
-Güncel bilgileri tarihli kaynaklarla destekle; teyit edemiyorsan belirt.
+# 10. Koruma ve kültürel miras
+Güncel konum, korunma durumu, restorasyonlar, riskler, resmî
+tescil veya miras statüsü, doğal ve insan kaynaklı etkiler,
+koruma çalışmaları ve tartışmalar.
+Güncel durumu doğrulayacak kaynak bulunamazsa bunu belirt.
 
 [[ONEM]]
 
-11. ESERİN TARİHSEL ÖNEMİ
-- Tarihçiler ve arkeologlar için önemi
-- Sanat ve mimarlık tarihi bakımından değeri
-- Bölgesel ve evrensel kültür mirasındaki yeri
-- Günümüzdeki kültürel ve toplumsal anlamı
-- Eserin geçmiş hakkında hangi soruları cevaplayabildiği
-- Hangi soruların hâlâ açık kaldığı
+# 11. Tarihsel önem
+Eserin tarihçiler, arkeologlar, sanat tarihçileri ve mimarlık
+tarihi açısından önemi. Bölgesel ve evrensel kültür mirasındaki
+yeri, günümüzdeki anlamı ve geçmiş hakkında sağlayabildiği bilgiler.
 
 [[BELIRSIZLIKLAR]]
 
-12. TARTIŞMALAR VE BELİRSİZLİKLER
-- Kimlik ve tarihlendirme tartışmaları
-- Farklı uzman görüşleri varsa bunlar
-- Kaynaklar arasındaki uyuşmazlıklar
-- Fotoğraftan kesinleştirilemeyen noktalar
-- Daha sağlam sonuca ulaşmak için gereken kanıtlar
+# 12. Tartışmalar ve belirsizlikler
+Kimlik, tarihlendirme ve yorum farklılıkları; kaynaklar arasındaki
+uyuşmazlıklar; fotoğraftan belirlenemeyen noktalar ve kesin sonuca
+ulaşmak için gereken ek kanıtlar.
 
 [[KAYNAKLAR]]
 
-13. KAYNAKÇA VE İLERİ ARAŞTIRMA
-- Kullanılan kaynakların başlığı ve kurumu/yazarı
-- Kaynağın doğrudan bağlantısı
-- Kaynağın hangi iddiayı desteklediği
-- Varsa yayın veya güncelleme tarihi
-- Müze katalogları, akademik yayınlar ve resmî kayıtlar
-- İleri araştırma için uygun arama başlıkları
-
-Arama sırasında gerçekten ulaşılan kaynakları ayrı listele.
-Yalnızca önerilen kurumları "başvurulabilecek kaynaklar" olarak ayır.
-Uydurma URL, kitap adı veya yayın künyesi üretme.
+# 13. Kaynakça
+Araştırma sırasında gerçekten bulunan kaynakların başlığı,
+yazarı veya kurumu, doğrudan bağlantısı ve desteklediği iddia.
+Akademik yayınlar, müze katalogları, resmî kurumlar ve kazı
+raporlarını tercih et. Kaynak önerilerini kullanılmış kaynaklardan
+ayrı tut. Sahte kaynak veya URL üretme.
 
 [[SONUC]]
 
-14. GENEL DEĞERLENDİRME
-- Eserin kimliğine dair en güçlü sonuç
-- En sağlam tarihsel çıkarımlar
-- Güven düzeyi ve gerekçesi
-- Araştırmanın en önemli bulguları
-- Kullanıcının eseri daha iyi tanımlaması için gereken bilgiler
+# 14. Genel değerlendirme
+Eserin kimliğine dair en güçlü sonuç, en sağlam tarihsel çıkarımlar,
+güven düzeyi, araştırmanın önemli bulguları ve kesinleştirilemeyen
+sorular. Daha iyi teşhis için gerekli ek fotoğraf ve bilgiler.
 
 SON TALİMAT:
-Her bölümü olabildiğince kapsamlı yaz. Toplam yanıtı bir kısa
-özetle sınırlandırma. Gerektiğinde uzun açıklamalar, alt başlıklar,
-madde listeleri ve karşılaştırma tabloları kullan.
+Her bölümü kapsamlı ve ayrıntılı yaz. Gerektiğinde alt başlıklar,
+tablolar ve madde listeleri kullan. Aynı bilgiyi tekrarlayarak
+uzatma; her bölüm yeni ve anlamlı bilgi içersin.
 """
 
 
-# =========================================================
-# GEMINI API
-# =========================================================
+# =====================================================
+# GEMINI API İSTEĞİ
+# =====================================================
 
 def gemini_istegi(govde):
     if not GEMINI_API_KEY:
         raise RuntimeError(
             "GEMINI_API_KEY bulunamadı. Render Environment "
-            "bölümünden bu değişkeni ekle."
+            "bölümüne API anahtarını eklemelisin."
         )
 
     son_hata = "Bilinmeyen API hatası."
@@ -279,9 +219,9 @@ def gemini_istegi(govde):
                 f"{cevap.text[:700]}"
             )
 
-            # Kimlik doğrulama, model adı ve istek biçimi hatalarında
-            # aynı isteği tekrar göndermek genellikle işe yaramaz.
-            if cevap.status_code not in (408, 429, 500, 502, 503, 504):
+            if cevap.status_code not in (
+                408, 429, 500, 502, 503, 504
+            ):
                 break
 
         except requests.RequestException as hata:
@@ -293,9 +233,9 @@ def gemini_istegi(govde):
     raise RuntimeError(son_hata)
 
 
-# =========================================================
+# =====================================================
 # FOTOĞRAF HAZIRLAMA
-# =========================================================
+# =====================================================
 
 def fotograf_hazirla(dosya_yolu):
     with Image.open(dosya_yolu) as kaynak:
@@ -315,12 +255,11 @@ def fotograf_hazirla(dosya_yolu):
         ).decode("utf-8")
 
 
-# =========================================================
-# KAYNAK TOPLAMA
-# =========================================================
+# =====================================================
+# ARAMA KAYNAKLARINI TOPLAMA
+# =====================================================
 
 def kaynaklari_al(cevap):
-    """Gemini'nin döndürdüğü arama kaynaklarını toplar."""
     kaynaklar = []
     gorulen = set()
 
@@ -328,11 +267,11 @@ def kaynaklari_al(cevap):
         meta = aday.get("groundingMetadata", {}) or {}
 
         for parca in meta.get("groundingChunks", []) or []:
-            web = parca.get("web", {}) or {}
-            url = web.get("uri", "")
-            baslik = web.get("title", "Kaynak")
+            web_bilgisi = parca.get("web", {}) or {}
+            url = web_bilgisi.get("uri", "")
+            baslik = web_bilgisi.get("title", "Kaynak")
 
-            if url.startswith("https://") or url.startswith("http://"):
+            if url.startswith(("https://", "http://")):
                 if url not in gorulen:
                     gorulen.add(url)
                     kaynaklar.append((baslik, url))
@@ -340,37 +279,42 @@ def kaynaklari_al(cevap):
     return kaynaklar
 
 
-def kaynak_listesi(kaynaklar):
+def kaynak_metni_olustur(kaynaklar):
     if not kaynaklar:
-        return (
-            "Arama kaynakları yanıtın kaynak metaverisinde "
-            "bulunamadı. Aşağıdaki kurumlar yalnızca araştırma "
-            "başlangıç noktalarıdır; esere ilişkin doğrulanmış "
-            "kaynaklar olarak değerlendirilmemelidir.\n\n"
-            "- [Kültür ve Turizm Bakanlığı](https://www.ktb.gov.tr/)\n"
-            "- [UNESCO Dünya Mirası Merkezi](https://whc.unesco.org/)\n"
-            "- [DergiPark](https://dergipark.org.tr/)"
-        )
+        return """
+Arama kaynakları API yanıtında bulunamadı. Aşağıdaki bağlantılar
+genel araştırma başlangıç noktalarıdır; esere dair doğrulanmış
+kaynaklar olarak değerlendirilmemelidir.
+
+- [Kültür ve Turizm Bakanlığı](https://www.ktb.gov.tr/)
+- [UNESCO Dünya Mirası Merkezi](https://whc.unesco.org/)
+- [DergiPark](https://dergipark.org.tr/)
+"""
 
     satirlar = [
-        "Aşağıdaki bağlantılar, bu yanıt sırasında arama "
-        "metaverisinde döndürülen kaynaklardır. Her birinin "
-        "ilgili iddiayı gerçekten desteklediğini ayrıca kontrol et.\n"
+        "Araştırma sırasında API tarafından döndürülen bağlantılar:"
     ]
 
-    for i, (baslik, url) in enumerate(kaynaklar, start=1):
-        temiz_baslik = html.escape(baslik)
-        temiz_url = html.escape(url, quote=True)
-        satirlar.append(f"{i}. [{temiz_baslik}]({temiz_url})")
+    for sira, (baslik, url) in enumerate(kaynaklar, 1):
+        baslik = html.escape(baslik)
+        url_guvenli = html.escape(url, quote=True)
+        satirlar.append(
+            f"{sira}. [{baslik}]({url_guvenli})"
+        )
+
+    satirlar.append(
+        "\nNot: Kaynak bağlantılarının bulunması, her iddiayı "
+        "doğruladıkları anlamına gelmez. İlgili sayfaları kontrol et."
+    )
 
     return "\n\n".join(satirlar)
 
 
-# =========================================================
+# =====================================================
 # RAPOR BÖLÜMLERİNİ AYIRMA
-# =========================================================
+# =====================================================
 
-BOLUM_ISARETLERI = [
+BOLUM_SIRASI = [
     ("GENEL_BAKIS", "Genel Bakış"),
     ("GORSEL_INCELEME", "Görsel İnceleme"),
     ("TARIHCE", "Ayrıntılı Tarihçe"),
@@ -390,7 +334,6 @@ BOLUM_ISARETLERI = [
 
 def raporu_bol(metin):
     bolumler = {}
-
     desen = r"\[\[([A-Z_]+)\]\]"
     eslesmeler = list(re.finditer(desen, metin))
 
@@ -412,33 +355,33 @@ def raporu_bol(metin):
     return bolumler
 
 
-# =========================================================
-# ANA İŞLEM
-# =========================================================
+# =====================================================
+# ANA ARAŞTIRMA FONKSİYONU
+# =====================================================
 
 def eser_ara(fotograf_yolu):
     toplam_baslangic = time.perf_counter()
 
     if not GEMINI_API_KEY:
         hata = (
-            "## Sunucu ayarı eksik\n\n"
+            "## API anahtarı eksik\n\n"
             "Render → Environment bölümüne `GEMINI_API_KEY` "
-            "değişkenini ekle. Anahtarı Python koduna veya "
-            "GitHub deposuna yazma."
+            "değişkenini ekle. API anahtarını GitHub'a koyma."
         )
         return (hata,) + ("",) * 14
 
     if not fotograf_yolu:
-        mesaj = "Lütfen önce bir eser fotoğrafı yükle."
-        return (mesaj,) + ("",) * 14
+        return (
+            "Lütfen önce bir eser fotoğrafı yükle.",
+        ) + ("",) * 14
 
     try:
-        # 1. Fotoğrafı optimize et.
+        # Fotoğrafı hazırla.
         foto_baslangic = time.perf_counter()
         foto_base64 = fotograf_hazirla(fotograf_yolu)
         foto_suresi = time.perf_counter() - foto_baslangic
 
-        # 2. Araştırma isteği oluştur.
+        # Uzun araştırma isteğini oluştur.
         govde = {
             "contents": [{
                 "role": "user",
@@ -461,7 +404,7 @@ def eser_ara(fotograf_yolu):
             }
         }
 
-        # 3. Model yanıtını al.
+        # Model yanıtını al.
         api_baslangic = time.perf_counter()
         cevap = gemini_istegi(govde)
         api_suresi = time.perf_counter() - api_baslangic
@@ -470,11 +413,13 @@ def eser_ara(fotograf_yolu):
 
         if not adaylar:
             raise RuntimeError(
-                "Model bir yanıt üretmedi. API yanıtı: "
+                "Model yanıt üretmedi. API geri bildirimi: "
                 + str(cevap.get("promptFeedback", {}))[:500]
             )
 
-        parcalar = adaylar[0].get("content", {}).get("parts", [])
+        parcalar = adaylar[0].get(
+            "content", {}
+        ).get("parts", [])
 
         rapor = "\n".join(
             parca.get("text", "")
@@ -488,21 +433,20 @@ def eser_ara(fotograf_yolu):
                 "ve Render günlüklerini kontrol et."
             )
 
-        # 4. Bölümleri ayır.
+        # Bölümlere ayır.
         bolumler = raporu_bol(rapor)
 
-        # Beklenmedik biçim durumunda tüm metni kaybetme.
         if len(bolumler) < 4:
             bolumler["GENEL_BAKIS"] = rapor
 
-        # 5. Arama kaynaklarını kaynaklar sekmesine ekle.
+        # Gerçek arama metaverisinde bulunan kaynakları ekle.
         kaynaklar = kaynaklari_al(cevap)
-        kaynak_metni = kaynak_listesi(kaynaklar)
+        kaynak_ek = kaynak_metni_olustur(kaynaklar)
 
         if bolumler.get("KAYNAKLAR"):
-            bolumler["KAYNAKLAR"] += "\n\n---\n\n" + kaynak_metni
+            bolumler["KAYNAKLAR"] += "\n\n---\n\n" + kaynak_ek
         else:
-            bolumler["KAYNAKLAR"] = kaynak_metni
+            bolumler["KAYNAKLAR"] = kaynak_ek
 
         toplam_sure = time.perf_counter() - toplam_baslangic
 
@@ -511,41 +455,22 @@ def eser_ara(fotograf_yolu):
             f"*Fotoğraf hazırlama: {foto_suresi:.1f} sn · "
             f"API yanıtı: {api_suresi:.1f} sn · "
             f"Toplam: {toplam_sure:.1f} sn · "
-            f"Bulunan arama kaynağı: {len(kaynaklar)}*"
+            f"Bulunan arama bağlantısı: {len(kaynaklar)}*"
         )
 
         genel = bolumler.get(
             "GENEL_BAKIS",
             "Genel bakış bölümü oluşturulamadı."
-        )
-        genel += sure_notu
-
-        sirali_anahtarlar = [
-            "GENEL_BAKIS",
-            "GORSEL_INCELEME",
-            "TARIHCE",
-            "KRONOLOJI",
-            "MIMARI_SANAT",
-            "ARKEOLOJI",
-            "TARIHSEL_BAGLAM",
-            "TURK_TARIHI",
-            "KARSILASTIRMA",
-            "KORUMA",
-            "ONEM",
-            "BELIRSIZLIKLAR",
-            "KAYNAKLAR",
-            "SONUC"
-        ]
+        ) + sure_notu
 
         sonuclar = [genel]
 
-        for anahtar in sirali_anahtarlar[1:]:
+        for anahtar, _baslik in BOLUM_SIRASI[1:]:
             sonuclar.append(
                 bolumler.get(
                     anahtar,
-                    "Bu bölüm model tarafından ayrı bir başlık altında "
-                    "oluşturulamadı. Genel Bakış sekmesindeki raporu "
-                    "da inceleyebilirsin."
+                    "Bu bölüm ayrı bir başlık altında oluşturulamadı. "
+                    "Genel Bakış sekmesindeki raporu da inceleyebilirsin."
                 )
             )
 
@@ -560,17 +485,16 @@ def eser_ara(fotograf_yolu):
             "## İnceleme sırasında hata oluştu\n\n"
             f"**Hata türü:** `{type(hata).__name__}`\n\n"
             f"**Ayrıntı:** `{str(hata)[:900]}`\n\n"
-            "Render günlüklerinde hata ayrıntılarını kontrol et. "
-            "Model adı, API anahtarı, kota veya Google Arama "
-            "aracının desteklenmesiyle ilgili bir sorun olabilir."
+            "Model adını, API anahtarını, kotayı ve Render "
+            "günlüklerini kontrol et."
         )
 
         return (mesaj,) + ("",) * 14
 
 
-# =========================================================
-# ARAYÜZ
-# =========================================================
+# =====================================================
+# TASARIM
+# =====================================================
 
 CSS = """
 :root {
@@ -653,6 +577,10 @@ button.primary {
 """
 
 
+# =====================================================
+# GRADIO ARAYÜZÜ
+# =====================================================
+
 with gr.Blocks(
     title="Tarihin İzini Sür | Kültür ve Miras",
     css=CSS,
@@ -662,21 +590,40 @@ with gr.Blocks(
     )
 ) as uygulama:
 
+    # Türk bayrağı ve imza
     gr.HTML("""
     <div style="
-        position:fixed; top:14px; right:16px;
-        z-index:99999; pointer-events:none;
+        position:fixed;
+        top:14px;
+        right:16px;
+        z-index:99999;
+        pointer-events:none;
+        text-align:center;
     ">
         <img
             src="https://upload.wikimedia.org/wikipedia/commons/b/b4/Flag_of_Turkey.svg"
             alt="Türk bayrağı"
             style="
-                width:58px; height:auto;
+                display:block;
+                width:58px;
+                height:auto;
                 border:1px solid #d9b878;
                 border-radius:4px;
                 box-shadow:0 3px 14px rgba(0,0,0,.5);
             "
         >
+
+        <div style="
+            margin-top:6px;
+            color:#d9b878;
+            font-size:10px;
+            font-family:Georgia,serif;
+            letter-spacing:1px;
+            white-space:nowrap;
+            text-shadow:0 1px 5px #000;
+        ">
+            by Taha Anıl Aygün
+        </div>
     </div>
     """)
 
@@ -687,7 +634,7 @@ with gr.Blocks(
         <div class="line"></div>
         <p>
             Bir fotoğrafın ardındaki tarihi keşfet.
-            Kaynakları incele, geçmişi ayrıntılarıyla araştır.
+            Geçmişi araştır, kaynakları incele.
         </p>
         <p class="sub">
             TARİH • ARKEOLOJİ • TÜRK KÜLTÜRÜ • MİRAS
@@ -697,8 +644,8 @@ with gr.Blocks(
 
     gr.Markdown(
         "## Yeni bir tarihî araştırma başlat\n"
-        "Fotoğrafı yükle. Uygulama eseri tanımlamaya, tarihini "
-        "araştırmaya ve kapsamlı bir rapor hazırlamaya çalışsın."
+        "Bir eser fotoğrafı yükle. Ayrıntılı tarihçe, kronoloji, "
+        "arkeolojik değerlendirme ve kaynak araştırması oluştur."
     )
 
     with gr.Group(elem_classes=["panel"]):
@@ -719,7 +666,7 @@ with gr.Blocks(
     with gr.Tabs():
         ciktilar = []
 
-        for baslik in [
+        sekmeler = [
             "🏛️ Genel Bakış",
             "🔎 Görsel İnceleme",
             "📜 Ayrıntılı Tarihçe",
@@ -734,7 +681,9 @@ with gr.Blocks(
             "❔ Belirsizlikler",
             "📚 Kaynaklar",
             "📝 Genel Sonuç"
-        ]:
+        ]
+
+        for baslik in sekmeler:
             with gr.Tab(baslik):
                 ciktilar.append(
                     gr.Markdown(
@@ -747,8 +696,7 @@ with gr.Blocks(
     <div id="footer-note">
         TARİHİN İZİNİ SÜR • Kültürel mirası tanı, araştır ve koru.
         <br>
-        Yapay zekâ çıktıları hata içerebilir; önemli tarihsel
-        iddiaları kaynaklardan ayrıca doğrula.
+        Yapay zekâ tarafından oluşturulan bilgiler doğrulanmalıdır.
     </div>
     """)
 
