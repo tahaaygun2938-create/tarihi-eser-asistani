@@ -1,616 +1,459 @@
-
 import os
-import io
-import re
-import time
+import json
 import base64
-import html
 import requests
 import gradio as gr
 from PIL import Image
 
-# ==================================================
-# TARİHİNİZİ — UYGULAMA AYARLARI
-# ==================================================
+# =========================================================
+# TARIHINIZI - MODEL AYARLARI
+# =========================================================
 
-APP_NAME = "Tarihinİzi"
 MODEL = "gemini-3.5-flash-lite"
 
-API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+API_KEY = (
+    os.environ.get("GEMINI_API_KEY")
+    or os.environ.get("GOOGLE_API_KEY")
+    or ""
+).strip()
 
 API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    + MODEL
-    + ":generateContent"
+    f"https://generativelanguage.googleapis.com/v1beta/"
+    f"models/{MODEL}:generateContent"
 )
 
 SECTIONS = [
-    ("GENEL_BAKIS", "🏛️ Genel Bakış"),
-    ("GORSEL_INCELEME", "🔎 Görsel İnceleme"),
-    ("TARIHCE", "📜 Tarihçe"),
-    ("KRONOLOJI", "🗓️ Kronoloji"),
-    ("MIMARI_SANAT", "🎨 Mimari ve Sanat"),
-    ("ARKEOLOJI", "⛏️ Arkeoloji"),
-    ("TARIHSEL_BAGLAM", "🌍 Tarihsel Bağlam"),
-    ("TURK_TARIHI", "🇹🇷 Türk Tarihi"),
-    ("KARSILASTIRMA", "⚖️ Karşılaştırma"),
-    ("KORUMA", "🛡️ Koruma"),
-    ("ONEM", "⭐ Tarihsel Önemi"),
-    ("BELIRSIZLIKLAR", "❔ Belirsizlikler"),
-    ("KAYNAKLAR", "📚 Kaynaklar"),
-    ("SONUC", "📝 Sonuç"),
+    "Genel Bilgi",
+    "Tarihçe",
+    "Dönem ve Tarih",
+    "Coğrafi Konum",
+    "Mimari ve Üslup",
+    "Malzeme ve Teknik",
+    "Kullanım Amacı",
+    "Kültürel Önemi",
+    "Yazıt ve Semboller",
+    "Benzer Eserler",
+    "Koruma Durumu",
+    "Eserin Kimliği",
+    "Kaynaklar",
+    "Kısa Özet",
 ]
 
-PROMPT = """
-Sen Tarihinİzi adlı tarih araştırma uygulamasının uzman
-araştırma asistanısın. Tarih, arkeoloji, sanat tarihi,
-mimarlık ve kültürel miras alanlarında çalışıyorsun.
 
-Kullanıcının gönderdiği fotoğrafı incele ve Türkçe bir
-araştırma raporu hazırla.
+def empty_result(message):
+    """Hata durumunda yalnızca ilk sekmede hata göster."""
+    return [message] + [""] * (len(SECTIONS) - 1)
 
-TEMEL KURALLAR:
-- Önce eserin ne olabileceğini belirle.
-- Görselde gerçekten görülen ayrıntılarla yorumları ayır.
-- Emin değilsen tek bir kimliği kesinmiş gibi sunma.
-- Eserin adını, konumunu, tarihini veya kökenini uydurma.
-- Türk tarihi bağlantılarını kanıt yoksa kesinleştirme.
-- Genel tarih bilgisini eser hakkında doğrudan kanıt gibi sunma.
-- Mümkün olduğunda Google Arama ile güvenilir kaynakları araştır.
-- Öncelikle müzeleri, üniversiteleri, resmî kurumları,
-  akademik yayınları ve arkeolojik envanterleri kullan.
-- Kaynak bağlantısı, kitap adı, yazar, alıntı veya envanter
-  numarası uydurma.
-- Kaynakların hangi iddiaları desteklediğini belirt.
-- Kaynaklar arasında uyuşmazlık varsa açıkla.
-- Her bölüm bilgi açısından dolu ama anlaşılır olsun.
-- Bilinmeyen bilgileri açıkça belirt.
-- Yanıtın tamamını Türkçe yaz.
-
-RAPORU AŞAĞIDAKİ ETİKETLERLE DÜZENLE.
-Etiketleri değiştirme; her birini ayrı başlıkta kullan.
-
-[[GENEL_BAKIS]]
-Eserin muhtemel adı, türü, olası uygarlığı, tahmini tarihi,
-bulunduğu yer biliniyorsa konumu ve teşhis güven düzeyi.
-Teşhisin hangi görsel özelliklere dayandığını açıkla.
-
-[[GORSEL_INCELEME]]
-Fotoğraftaki biçim, malzeme izlenimi, motifler, yazılar,
-süslemeler, aşınmalar ve belirgin ayrıntılar.
-Fotoğrafın hangi özellikleri belirlemeye yetmediğini de yaz.
-
-[[TARIHCE]]
-Eserin yapılış amacı, tarihsel ortamı, kullanım geçmişi,
-önemli tarihsel olaylarla ilişkisi, keşfi ve biliniyorsa
-restorasyon geçmişi.
-
-[[KRONOLOJI]]
-Önemli tarihleri ve olayları sıralı biçimde tabloyla göster.
-Tarihler tahminîyse veya kesin bilinmiyorsa belirt.
-
-[[MIMARI_SANAT]]
-Mimari özellikler, sanat üslubu, malzeme, teknik,
-süsleme anlayışı ve benzer sanat gelenekleri.
-
-[[ARKEOLOJI]]
-Biliniyorsa buluntu yeri, kazı geçmişi, arkeolojik bağlam,
-envanter bilgileri ve tarihlendirme yöntemleri.
-
-[[TARIHSEL_BAGLAM]]
-Eserin dönemindeki toplum, yönetim, ekonomi, ticaret,
-inançlar ve kültürel ilişkiler. Genel bilgilerle eser hakkında
-doğrudan doğrulanmış bilgileri birbirinden ayır.
-
-[[TURK_TARIHI]]
-Eserin Türk devletleri, Anadolu tarihi, Selçuklular,
-Osmanlılar veya Türk topluluklarıyla ilişkisini araştır.
-İlişki kanıtlanamıyorsa bunu açıkça belirt.
-
-[[KARSILASTIRMA]]
-Güvenilir kaynaklarla belirlenebiliyorsa benzer eserlerle
-karşılaştırma yap. Tarih, konum, malzeme ve üslup
-farklılıklarını açıkla.
-
-[[KORUMA]]
-Eserin bilinen güncel konumu, koruma durumu, restorasyonları,
-karşılaştığı riskler ve resmî koruma statüsü.
-Güncel bilgi doğrulanamıyorsa bunu belirt.
-
-[[ONEM]]
-Eserin tarih, arkeoloji, mimarlık, sanat ve kültürel miras
-açısından neden önemli olabileceğini açıkla.
-
-[[BELIRSIZLIKLAR]]
-Kimlik, tarih, köken ve kullanım hakkındaki belirsizlikler.
-Uzmanların farklı görüşleri varsa kaynaklarıyla açıkla.
-Daha kesin teşhis için hangi ek bilgilerin gerektiğini belirt.
-
-[[KAYNAKLAR]]
-Gerçekten araştırma sırasında bulunan kaynakları başlık,
-kurum veya yazar, bağlantı ve desteklediği iddiayla listele.
-Kaynak bulunamadıysa bunu açıkça yaz.
-Doğrulanmayan bağlantıları kaynak olarak sunma.
-
-[[SONUC]]
-En güçlü teşhis, güven düzeyi, temel bulgular ve belirsizlikler.
-Eserin kesin olarak tanımlanıp tanımlanamadığını özetle.
-"""
-
-
-# ==================================================
-# FOTOĞRAF HAZIRLAMA
-# ==================================================
 
 def prepare_image(image_path):
+    """Yüklenen görseli Gemini API için JPEG verisine dönüştür."""
     with Image.open(image_path) as original:
-        image = original.convert("RGB")
-        image.thumbnail((1400, 1400))
+        img = original.convert("RGB")
+        img.thumbnail((1600, 1600))
 
-        buffer = io.BytesIO()
-        image.save(
-            buffer,
-            format="JPEG",
-            quality=85,
-            optimize=True
-        )
+        from io import BytesIO
+        buffer = BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
 
-        return base64.b64encode(
+        image_data = base64.b64encode(
             buffer.getvalue()
         ).decode("utf-8")
 
+    return image_data
 
-# ==================================================
-# GEMINI 3.5 FLASH-LITE
-# ==================================================
 
-def ask_gemini(image_data):
-    if not API_KEY:
-        raise RuntimeError(
-            "GEMINI_API_KEY bulunamadı. Render > Environment "
-            "bölümünden API anahtarını eklemelisin."
-        )
-
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": PROMPT},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": image_data
-                        }
-                    }
-                ]
-            }
-        ],
-        "tools": [
-            {"google_search": {}}
-        ],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 12000
-        }
-    }
-
-    response = requests.post(
-        API_URL,
-        params={"key": API_KEY},
-        json=payload,
-        timeout=180
-    )
-
-    if not response.ok:
-        try:
-            error_data = response.json()
-            error_message = error_data.get(
-                "error", {}
-            ).get("message", response.text)
-        except ValueError:
-            error_message = response.text
-
-        if response.status_code == 429:
-            raise RuntimeError(
-                "API kullanım kotası veya istek sınırı aşıldı. "
-                "Google AI Studio'daki model kotanı kontrol et. "
-                + str(error_message)[:600]
-            )
-
-        raise RuntimeError(
-            f"Gemini API HTTP {response.status_code}: "
-            + str(error_message)[:800]
-        )
-
-    data = response.json()
+def extract_response(data):
+    """Gemini cevabını güvenli şekilde oku."""
     candidates = data.get("candidates", [])
 
     if not candidates:
-        raise RuntimeError(
-            "Gemini yanıt üretmedi. Ayrıntı: "
-            + str(data.get("promptFeedback", {}))[:500]
+        prompt_feedback = data.get("promptFeedback", {})
+        block_reason = prompt_feedback.get("blockReason")
+
+        if block_reason:
+            raise ValueError(
+                f"Google isteği engelledi. Sebep: {block_reason}"
+            )
+
+        raise ValueError(
+            "Google API boş cevap döndürdü. Render Logs bölümünü kontrol et."
         )
 
     candidate = candidates[0]
     parts = candidate.get("content", {}).get("parts", [])
 
-    report = "\n".join(
+    text_parts = [
         part.get("text", "")
         for part in parts
         if part.get("text")
-    ).strip()
+    ]
 
-    if not report:
-        raise RuntimeError(
-            "Gemini boş yanıt verdi. Render Logs bölümünü kontrol et."
+    if not text_parts:
+        raise ValueError(
+            "Model metin döndürmedi. Lütfen farklı bir eser fotoğrafı dene."
         )
 
-    # Yalnızca API yanıtında bulunan arama bağlantılarını al.
+    return "\n".join(text_parts), candidate
+
+
+def extract_json(text):
+    """Modelin JSON cevabını ayrıştır."""
+    cleaned = text.strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "", 1)
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3]
+        cleaned = cleaned.strip()
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start:end + 1])
+
+        raise ValueError(
+            "Modelin cevabı beklenen JSON biçiminde değil. "
+            "Lütfen tekrar dene."
+        )
+
+
+def extract_sources(candidate):
+    """Google Arama sonuçlarından dönen kaynak bağlantılarını al."""
+    metadata = candidate.get("groundingMetadata", {})
+    chunks = metadata.get("groundingChunks", [])
+
     sources = []
     seen_urls = set()
 
-    metadata = candidate.get("groundingMetadata", {}) or {}
+    for chunk in chunks:
+        web_source = chunk.get("web", {})
+        title = web_source.get("title", "Kaynak")
+        url = web_source.get("uri", "")
 
-    for chunk in metadata.get("groundingChunks", []) or []:
-        web_info = chunk.get("web", {}) or {}
-        url = web_info.get("uri", "")
-        title = web_info.get("title", "Kaynak")
-
-        if (
-            url.startswith(("https://", "http://"))
-            and url not in seen_urls
-        ):
+        if url and url not in seen_urls:
             seen_urls.add(url)
-            sources.append((title, url))
+            sources.append(f"- [{title}]({url})")
 
-    return report, sources
+    if sources:
+        return "\n".join(sources)
 
-
-# ==================================================
-# RAPORU BÖLÜMLERE AYIRMA
-# ==================================================
-
-def split_report(report):
-    pattern = r"\[\[([A-Z_]+)\]\]"
-    matches = list(re.finditer(pattern, report))
-    sections = {}
-
-    for index, match in enumerate(matches):
-        start = match.end()
-
-        if index + 1 < len(matches):
-            end = matches[index + 1].start()
-        else:
-            end = len(report)
-
-        sections[match.group(1)] = report[start:end].strip()
-
-    return sections
+    return (
+        "Google Arama bağlantısı bu yanıtta kaynak döndürmedi. "
+        "Eser bilgilerini bağımsız olarak doğrula."
+    )
 
 
-def format_sources(sources):
-    if not sources:
-        return (
-            "Arama yanıtından kaynak bağlantısı alınamadı. "
-            "Bu, esere ait doğrulanmış kaynak bulunmadığı "
-            "anlamına gelmez. Bilgileri ayrıca kontrol et."
+def research_artifact(image_path, extra_info):
+    if not API_KEY:
+        return empty_result(
+            "HATA: API anahtarı bulunamadı.\n\n"
+            "Render → Environment bölümüne `GEMINI_API_KEY` "
+            "adında bir değişken ekle ve değerine Google AI Studio "
+            "API anahtarını yaz. Anahtarı kodun içine koyma."
         )
 
-    lines = [
-        "Aşağıdaki bağlantılar arama yanıtından alınmıştır. "
-        "İlgili iddiaları destekleyip desteklemediklerini "
-        "kaynak sayfalarında ayrıca kontrol et."
-    ]
-
-    for number, (title, url) in enumerate(sources, start=1):
-        safe_title = html.escape(title)
-        safe_url = html.escape(url, quote=True)
-
-        lines.append(
-            f"{number}. [{safe_title}]({safe_url})"
-        )
-
-    return "\n\n".join(lines)
-
-
-# ==================================================
-# ANA ANALİZ FONKSİYONU
-# ==================================================
-
-def analyze_artifact(image_path):
     if not image_path:
-        message = "Önce analiz etmek istediğin eser fotoğrafını yükle."
-        return (message,) + ("",) * (len(SECTIONS) - 1)
-
-    started = time.perf_counter()
+        return empty_result("Lütfen önce bir tarihî eser fotoğrafı yükle.")
 
     try:
         image_data = prepare_image(image_path)
-        report, sources = ask_gemini(image_data)
-        sections = split_report(report)
 
-        # Model etiketleri üretmezse raporu kaybetme.
-        if len(sections) < 4:
-            sections["GENEL_BAKIS"] = report
+        user_details = (extra_info or "").strip()
+        if not user_details:
+            user_details = "Kullanıcı ek bilgi vermedi."
 
-        source_text = format_sources(sources)
+        prompt = f"""
+Sen Tarihinİzi adlı tarihî eser araştırma uygulamasının uzman
+araştırma asistanısın. Kullanıcı tarafından yüklenen görseli incele.
 
-        if sections.get("KAYNAKLAR"):
-            sections["KAYNAKLAR"] += (
-                "\n\n---\n\n" + source_text
-            )
-        else:
-            sections["KAYNAKLAR"] = source_text
+KULLANICININ EK BİLGİSİ:
+{user_details}
 
-        elapsed = time.perf_counter() - started
+GÖREV:
+1. Görseldeki eserin ne olabileceğini belirle.
+2. Google Arama aracını kullanarak bilgileri güvenilir kaynaklarla
+   karşılaştır. Mümkünse müze, resmî kültür kurumu, kazı raporu,
+   akademik yayın veya güvenilir ansiklopedi kaynaklarına öncelik ver.
+3. Eserin kimliği kesin değilse bunu açıkça söyle. Tahmini bilgiyi
+   kesin tarihî gerçek gibi sunma.
+4. Fotoğrafta görülemeyen yazıları veya ayrıntıları uydurma.
+5. Bulamadığın bilgileri "Doğrulanamadı" şeklinde belirt.
+6. Görseldeki eser ile internette bulduğun eser arasında uyuşmazlık
+   varsa bunu özellikle açıkla.
+7. Yanıtı Türkçe yaz.
+8. Aşağıdaki anahtarları içeren, geçerli bir JSON nesnesi döndür.
+   JSON dışında açıklama veya Markdown kod çiti yazma.
+9. Her anahtarın değeri bir metin olmalı.
 
-        sections["GENEL_BAKIS"] = (
-            sections.get(
-                "GENEL_BAKIS",
-                "Genel bakış oluşturulamadı."
-            )
-            + f"\n\n---\n\n"
-            + f"*Model: `{MODEL}` · "
-            + f"Süre: {elapsed:.1f} saniye · "
-            + f"Arama bağlantısı: {len(sources)}*"
+JSON anahtarları:
+{json.dumps(SECTIONS, ensure_ascii=False)}
+
+Her bölümde olabildiğince açıklayıcı ol. Kaynaklar bölümünde
+kaynak adlarını ve bağlantılarını belirt. Google Arama sonuçları
+kaynak döndürmezse bunu açıkça belirt; bağlantı uydurma.
+"""
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": image_data,
+                            }
+                        },
+                    ],
+                }
+            ],
+            "tools": [
+                {"google_search": {}}
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 7000,
+            },
+        }
+
+        # Model adı ekranda da gösterilen MODEL sabitinden geliyor.
+        print(f"TARIHINIZI_MODEL={MODEL}")
+        print("Gemini API isteği gönderiliyor.")
+
+        response = requests.post(
+            API_URL,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": API_KEY,
+            },
+            json=payload,
+            timeout=120,
         )
 
-        results = []
+        # Hata cevabını kaybetmeden işle.
+        try:
+            response_data = response.json()
+        except ValueError:
+            response_data = {}
 
-        for key, _label in SECTIONS:
-            results.append(
-                sections.get(
-                    key,
-                    "Bu bölüm ayrı oluşturulamadı. "
-                    "Genel Bakış bölümündeki raporu incele."
+        if not response.ok:
+            error_info = response_data.get("error", {})
+            error_message = error_info.get(
+                "message",
+                response.text[:1500] or "Açıklama bulunamadı.",
+            )
+            status = response.status_code
+
+            print(f"GEMINI_HTTP_STATUS={status}")
+            print(f"GEMINI_ERROR={error_message[:1500]}")
+
+            if status == 429:
+                return empty_result(
+                    "GEMINI KOTA HATASI (429)\n\n"
+                    f"Google'ın mesajı:\n{error_message}\n\n"
+                    "Model isteği: gemini-3.5-flash-lite\n\n"
+                    "Kontrol et:\n"
+                    "1. Google AI Studio'da doğru projeyi seç.\n"
+                    "2. Usage bölümünde 3.5 Flash-Lite kullanımını kontrol et.\n"
+                    "3. Rate limits bölümündeki aktif RPM, TPM ve günlük "
+                    "istek limitlerini kontrol et.\n"
+                    "4. Render'daki GEMINI_API_KEY değerinin, kontrol "
+                    "ettiğin projeye ait olduğundan emin ol.\n\n"
+                    "Not: Kod, Google'ın kota sınırını kaldıramaz."
                 )
+
+            if status in (401, 403):
+                return empty_result(
+                    f"API ERİŞİM HATASI ({status})\n\n"
+                    f"Google'ın mesajı:\n{error_message}\n\n"
+                    "Render → Environment bölümündeki API anahtarını ve "
+                    "anahtarın bağlı olduğu Google projesini kontrol et."
+                )
+
+            if status == 404:
+                return empty_result(
+                    "MODEL BULUNAMADI (404)\n\n"
+                    f"Google'ın mesajı:\n{error_message}\n\n"
+                    f"İstek yapılan model: {MODEL}"
+                )
+
+            return empty_result(
+                f"GEMINI API HATASI ({status})\n\n{error_message}"
             )
 
-        return tuple(results)
+        response_text, candidate = extract_response(response_data)
+        result = extract_json(response_text)
 
-    except Exception as error:
-        message = (
-            "## Araştırma sırasında hata oluştu\n\n"
-            f"**Hata türü:** `{type(error).__name__}`\n\n"
-            f"**Ayrıntı:** {str(error)[:1000]}\n\n"
-            "Render > Logs bölümünü de kontrol edebilirsin."
+        outputs = [
+            str(result.get(section, "Bu bölüm için bilgi bulunamadı."))
+            for section in SECTIONS
+        ]
+
+        # Kaynaklar sekmesini API'nin gerçek kaynaklarıyla destekle.
+        actual_sources = extract_sources(candidate)
+        existing_sources = outputs[12].strip()
+
+        outputs[12] = (
+            existing_sources
+            + "\n\n### Google Arama kaynak bağlantıları\n"
+            + actual_sources
+        ).strip()
+
+        # Modeli görünür şekilde belirt.
+        outputs[0] = (
+            f"**Kullanılan model:** `{MODEL}`\n\n"
+            + outputs[0]
         )
 
-        return (message,) + ("",) * (len(SECTIONS) - 1)
+        print("Gemini API isteği başarıyla tamamlandı.")
+        return outputs
+
+    except requests.Timeout:
+        return empty_result(
+            "ZAMAN AŞIMI: Google API zamanında cevap vermedi. "
+            "Biraz bekleyip tekrar dene."
+        )
+
+    except requests.RequestException as exc:
+        print(f"NETWORK_ERROR={type(exc).__name__}: {exc}")
+        return empty_result(
+            "BAĞLANTI HATASI: Google API'ye ulaşılamadı. "
+            "Render Logs bölümünü kontrol et."
+        )
+
+    except (ValueError, KeyError, TypeError) as exc:
+        print(f"RESPONSE_ERROR={type(exc).__name__}: {exc}")
+        return empty_result(
+            f"CEVAP İŞLEME HATASI: {exc}\n\n"
+            "Render Logs bölümünde ayrıntılar bulunabilir."
+        )
+
+    except Exception as exc:
+        print(f"UNEXPECTED_ERROR={type(exc).__name__}: {exc}")
+        return empty_result(
+            "Beklenmeyen bir hata oluştu. Render Logs bölümünü kontrol et."
+        )
 
 
-# ==================================================
-# TÜRK TEMALI TASARIM
-# ==================================================
+# =========================================================
+# ARAYÜZ
+# =========================================================
 
 CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
-
-:root {
-    --red: #b51f2b;
-    --red-dark: #68131c;
-    --gold: #d7b779;
-    --cream: #f3eee5;
-}
-
 .gradio-container {
-    max-width: 1250px !important;
+    max-width: 1200px !important;
     margin: auto !important;
-    color: var(--cream) !important;
-    font-family: 'Inter', sans-serif !important;
-    background:
-        radial-gradient(ellipse at 50% 0%, #49171e 0%, transparent 43%),
-        linear-gradient(145deg, #171518, #100f12 55%, #241316) !important;
 }
-
-body {
-    background: #100f12 !important;
-}
-
-#hero {
-    position: relative;
-    overflow: hidden;
-    text-align: center;
-    padding: 40px 20px 32px;
-    margin: 12px 0 26px;
-    border: 1px solid rgba(215,183,121,.32);
+#main-header {
+    background: linear-gradient(135deg, #780000, #c1121f, #e63946);
+    color: #ffffff !important;
+    border: 1px solid rgba(255,255,255,0.2);
     border-radius: 20px;
-    background:
-        radial-gradient(ellipse at 50% 120%, rgba(181,31,43,.30), transparent 65%),
-        linear-gradient(135deg, rgba(104,19,28,.32), rgba(20,18,21,.95) 70%);
-    box-shadow: 0 12px 40px rgba(0,0,0,.30);
+    padding: 26px;
+    margin-bottom: 18px;
+    text-align: center;
 }
-
-#hero:before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 10%;
-    right: 10%;
-    height: 2px;
-    background: linear-gradient(
-        90deg, transparent, #b51f2b, #d7b779, #b51f2b, transparent
-    );
+#main-header h1, #main-header p {
+    color: #ffffff !important;
 }
-
-#hero h1 {
-    font-family: 'Cinzel', Georgia, serif !important;
-    font-size: clamp(34px, 5vw, 58px) !important;
-    font-weight: 700 !important;
-    letter-spacing: 2px;
-    margin: 18px 0;
-    background: linear-gradient(
-        100deg, #f4e4c1, #d7b779 45%, #fff1d5 70%, #cba15d
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    filter: drop-shadow(0 3px 15px rgba(181,31,43,.22));
+#main-header h1 {
+    font-size: 36px !important;
+    font-weight: 900 !important;
+    margin-bottom: 8px !important;
 }
-
-#hero p {
-    color: #c9c0b8 !important;
-    letter-spacing: 1.3px;
+#main-header p {
+    font-size: 15px !important;
 }
-
-#flag {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-}
-
-#flag img {
-    width: 46px;
-    height: 30px;
-    object-fit: cover;
-    border-radius: 4px;
-    box-shadow: 0 0 18px rgba(181,31,43,.38);
-}
-
-#flag small {
-    color: #d7b779;
-    font-size: 10px;
-    letter-spacing: 1.5px;
-}
-
-.panel, .gr-panel, .gr-box {
-    border-color: rgba(215,183,121,.22) !important;
-}
-
-label, .prose, .markdown {
-    color: #eee5db !important;
-}
-
-button.primary {
-    background: linear-gradient(
-        110deg, #74151f, #bd2734 55%, #8b1925
-    ) !important;
-    border: 1px solid rgba(235,192,137,.45) !important;
-    border-radius: 10px !important;
+#research-button {
+    background: linear-gradient(90deg, #b00020, #e63946) !important;
     color: white !important;
-    font-weight: 700 !important;
-    letter-spacing: .7px;
-    box-shadow: 0 5px 18px rgba(181,31,43,.22);
-    transition: .2s ease !important;
-}
-
-button.primary:hover {
-    filter: brightness(1.15);
-    box-shadow: 0 7px 24px rgba(181,31,43,.35);
-}
-
-button, input, textarea {
-    border-radius: 9px !important;
-}
-
-.tab-nav button.selected {
-    color: #f0ce91 !important;
-    border-bottom: 2px solid #b51f2b !important;
-}
-
-footer {
-    display: none !important;
-}
-
-@media (max-width: 600px) {
-    #hero {
-        padding: 28px 12px 22px;
-    }
-
-    #hero h1 {
-        letter-spacing: 1px;
-    }
+    border: none !important;
+    font-weight: 800 !important;
 }
 """
 
-
-# ==================================================
-# GRADIO ARAYÜZÜ
-# ==================================================
-
 with gr.Blocks(
-    title="Tarihinİzi",
-    css=CSS,
     theme=gr.themes.Soft(
         primary_hue="red",
         secondary_hue="amber",
-        neutral_hue="slate"
-    )
-) as app:
+    ),
+    css=CSS,
+    title="Tarihinİzi",
+) as demo:
 
     gr.HTML("""
-    <div id="hero">
-        <div id="flag">
-            <img
-                src="https://upload.wikimedia.org/wikipedia/commons/b/b4/Flag_of_Turkey.svg"
-                alt="Türk bayrağı"
-            >
-            <small>BY TAHA ANIL AYGÜN</small>
-        </div>
-
-        <h1>Tarihinİzi</h1>
-
-        <p>GEÇMİŞİN İZİNDE, TARİHİN DERİNLİĞİNDE</p>
-        <p>🇹🇷 TÜRK TARİHİ · ARKEOLOJİ · KÜLTÜREL MİRAS</p>
+    <div id="main-header">
+        <h1>🇹🇷 Tarihinİzi</h1>
+        <p>
+            Geçmişin izlerini keşfet.
+            Tarihî eserleri görsellerle araştır,
+            bilgileri kaynaklarla karşılaştır.
+        </p>
     </div>
     """)
 
     gr.Markdown(
-        "Fotoğrafını yükle, eserin geçmişini keşfet. "
-        "Tarihî eserleri 14 ayrı araştırma başlığında incele."
+        f"**Aktif model:** `{MODEL}`  \n"
+        "Araştırma sonuçları yapay zekâ tarafından hazırlanır. "
+        "Önemli tarihî bilgileri kaynaklardan doğrula."
     )
 
-    with gr.Group():
-        image_input = gr.Image(
-            type="filepath",
-            label="🏛️ Tarihî eser fotoğrafı",
-            sources=["upload"]
-        )
+    with gr.Row():
+        with gr.Column(scale=1):
+            image_input = gr.Image(
+                label="Tarihî eser fotoğrafı",
+                type="filepath",
+                height=330,
+            )
 
-        submit_button = gr.Button(
-            "🇹🇷 ESERİ ARAŞTIR",
-            variant="primary",
-            size="lg"
-        )
+            extra_info = gr.Textbox(
+                label="Ek bilgi (isteğe bağlı)",
+                placeholder=(
+                    "Örneğin: Bulunduğu şehir, köy, müze veya "
+                    "eser üzerindeki yazılar..."
+                ),
+                lines=3,
+            )
 
-    with gr.Tabs():
-        outputs = []
+            research_button = gr.Button(
+                "🔎 Eseri Araştır",
+                variant="primary",
+                elem_id="research-button",
+            )
 
-        for _key, label in SECTIONS:
-            with gr.Tab(label):
-                output = gr.Markdown()
-                outputs.append(output)
+            gr.Markdown(
+                "İpucu: Eserin tamamının ve üzerindeki yazıların "
+                "net göründüğü bir fotoğraf yükle."
+            )
 
-    gr.Markdown(
-        "> **Tarihinİzi:** Yapay zekâ destekli ön araştırma aracıdır. "
-        "Eser kimliğini, tarihini ve kaynakları gerektiğinde "
-        "akademik yayınlar ve resmî kurumlarla doğrula."
+        with gr.Column(scale=2):
+            result_boxes = []
+
+            with gr.Tabs():
+                for section in SECTIONS:
+                    with gr.Tab(section):
+                        output = gr.Markdown(
+                            value="Araştırma başlatıldığında sonuç burada görünür."
+                        )
+                        result_boxes.append(output)
+
+    research_button.click(
+        fn=research_artifact,
+        inputs=[image_input, extra_info],
+        outputs=result_boxes,
+        show_progress="full",
     )
-
-    submit_button.click(
-        fn=analyze_artifact,
-        inputs=[image_input],
-        outputs=outputs
-    )
-
-    image_input.change(
-        fn=lambda: [""] * len(SECTIONS),
-        inputs=[],
-        outputs=outputs
-    )
-
-
-# ==================================================
-# RENDER BAŞLATMA
-# ==================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
-
-    app.launch(
+    demo.queue(default_concurrency_limit=2).launch(
         server_name="0.0.0.0",
-        server_port=port
+        server_port=port,
     )
