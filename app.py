@@ -1,273 +1,279 @@
-
-import os
-import base64
-from io import BytesIO
+%pip -q install -U gradio requests pillow
 
 import gradio as gr
 import requests
+import json
+import base64
+import time
+import io
+import re
 from PIL import Image
 
-API_KEY = os.getenv("GEMINI_API_KEY", "")
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Ortamda tanımlı bir global anahtar var mı kontrol et
+global_anahtar = globals().get("anahtar", "")
 
+def gemini_istegi(govde, api_key):
+    """Geçici sunucu hatalarında Gemini isteğini tekrar dener."""
+    aktif_model = "models/gemini-3.8-flash"
+    adres = f"https://generativelanguage.googleapis.com/v1beta/{aktif_model}:generateContent"
 
-def eseri_incele(image_path):
-    if not image_path:
-        return "Önce bir fotoğraf yükle."
+    for deneme in range(4):
+        try:
+            cevap = requests.post(
+                adres,
+                headers={"x-goog-api-key": api_key},
+                json=govde,
+                timeout=90
+            )
+        except requests.RequestException:
+            if deneme < 3:
+                time.sleep(2 ** (deneme + 1))
+                continue
+            raise RuntimeError(
+                "Gemini sunucusuna bağlanılamadı. Biraz sonra tekrar dene."
+            )
 
-    if not API_KEY:
-        return "HATA: Render ayarlarında GEMINI_API_KEY bulunamadı."
+        if cevap.status_code == 200:
+            return cevap.json()
+
+        # Geçici sunucu yoğunluğu veya istek sınırı
+        if cevap.status_code in [429, 500, 502, 503, 504]:
+            if deneme < 3:
+                time.sleep(2 ** (deneme + 1))
+                continue
+
+        raise RuntimeError(
+            f"Gemini HTTP {cevap.status_code}: {cevap.text[:700]}"
+        )
+
+    raise RuntimeError("Gemini isteği tamamlanamadı.")
+
+def eser_ara(fotograf_yolu, kullanici_anahtari):
+    # Hangi anahtarın kullanılacağını belirle
+    api_key = kullanici_anahtari.strip() if kullanici_anahtari else global_anahtar
+
+    if not api_key:
+        return (
+            "HATA: Gemini API anahtarı bulunamadı! Lütfen aşağıdaki alana API anahtarınızı girin veya yukarıdaki 'anahtar' tanımlama hücresini çalıştırın.",
+            "Anahtar Eksik",
+            "Anahtar Eksik",
+            "Anahtar Eksik"
+        )
+
+    if not fotograf_yolu:
+        return (
+            "Lütfen bir fotoğraf yükleyin.",
+            "Henüz bilgi yok.",
+            "Henüz bilgi yok.",
+            "Henüz kaynak yok."
+        )
 
     try:
-        if isinstance(image_path, dict):
-    image_path = image_path.get("path")
+        # 1. Fotoğrafı güvenli biçimde JPEG'e dönüştür ve sıkıştır
+        with Image.open(fotograf_yolu) as im:
+            im = im.convert("RGB")
+            im.thumbnail((1200, 1200))
+            tampon = io.BytesIO()
+            im.save(tampon, format="JPEG", quality=85)
+            foto_bytes = tampon.getvalue()
 
-if not image_path or not os.path.exists(image_path):
-    return "Fotoğraf dosyası bulunamadı. Lütfen fotoğrafı yeniden yükle."
+        foto_base64 = base64.b64encode(foto_bytes).decode("utf-8")
 
-image = Image.open(image_path).convert("RGB")
-        image.thumbnail((1200, 1200))
-
-        buffer = BytesIO()
-        image.save(buffer, format="JPEG", quality=85)
-
-        encoded_image = base64.b64encode(
-            buffer.getvalue()
-        ).decode("utf-8")
-
+        # 2. Gemini'den JSON çıktısı al
         prompt = """
-Sen tarih, arkeoloji ve sanat tarihi alanlarında yardımcı
-olan bir araştırma asistanısın.
+Sen tarihî eserler üzerine çalışan son derece dikkatli bir arkeoloji ve sanat tarihi uzmanısın.
+Ekli fotoğrafı görsel olarak en ince ayrıntısına kadar incele.
 
-Fotoğraftaki nesneyi dikkatlice incele ve Türkçe cevap ver.
+Yalnızca geçerli bir JSON nesnesi döndür. Markdown kod çiti (```json ... ```) ekleme.
+Şu anahtarları içeren bir yapı oluştur:
 
-Şu başlıkları kullan:
-1. Eserin olası adı
-2. Görsel özellikleri ve malzemesi
-3. Tahmini tarih ve dönem
-4. Olası kökeni ve kültürü
-5. Tarihî önemi
-6. Benzer eserlerle karşılaştırma
-7. Sonucu doğrulamak için araştırma önerileri
+{
+  "eser_adi": "Eserin/Yapının olası adı",
+  "guven": "Tahmini güven düzeyi (Düşük, Orta veya Yüksek; gerekçesiyle birlikte)",
+  "genel_bakis": "Eserin genel görünümü, mimari formu ve tanıtıcı açıklaması",
+  "tarihce": "Tahmini dönem, inşa tarihi, ilişkili olduğu uygarlık/hükümranlık ve tarihsel bağlamı",
+  "arkeolojik_bulgular": "Fotoğrafta gözlenen yapısal özellikler, malzeme, figürler, süslemeler ve tarz detayları",
+  "tarihsel_onem": "Eserin kültürel, sanatsal ve tarihsel önemi, varsa günümüzdeki koruma statüsü",
+  "belirsizlikler": "Alternatif olasılıklar, kesin saptanamayan detaylar ve bilimsel tartışmalar"
+}
 
-Önemli kurallar:
-- Emin değilsen kesin konuşma.
-- Fotoğraftan anlaşılamayan bilgileri uydurma.
-- Kaynak veya bağlantı uydurma.
-- Birden fazla ihtimal varsa açıkla.
-- Nesnenin tarihî eser olmayabileceğini de değerlendir.
-- Tahminlerini doğrulanmış bilgilerden ayır.
+KURALLAR:
+- Türkçe yaz ve her bölümü olabildiğince detaylı/kapsamlı kolajlar halinde açıkla.
+- Tahminleri kesin birer gerçekmiş gibi sunma; güven derecesini açıkça yansıt.
+- Fotoğrafta görünmeyen arkeolojik unsurları veya konumları uydurma.
 """
 
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            "v1beta/models/"
-            + MODEL
-            + ":generateContent"
-        )
-
-        response = requests.post(
-            url,
-            params={"key": API_KEY},
-            json={
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": encoded_image
-                            }
+        govde = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": foto_base64
                         }
-                    ]
-                }],
-                "generationConfig": {
-                    "temperature": 0.2,
-                    "maxOutputTokens": 2000
-                }
-            },
-            timeout=90
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.35,
+                "responseMimeType": "application/json"
+            }
+        }
+
+        sonuc = gemini_istegi(govde, api_key)
+        adaylar = sonuc.get("candidates", [])
+
+        if not adaylar:
+            return ("Yapay zekâ yanıt üretemedi.", "", "", "")
+
+        metin = adaylar[0].get("content", {}).get("parts", [])[0].get("text", "").strip()
+
+        # JSON temizleme
+        metin_temiz = re.sub(r"^```(?:json)?\s*|\s*```$", "", metin, flags=re.IGNORECASE).strip()
+
+        try:
+            bilgi = json.loads(metin_temiz)
+        except json.JSONDecodeError:
+            return (f"### Araştırma Dosyası\n\n{metin_temiz}", "Ayrı tarihçe oluşturulamadı.", "Ayrı bulgu oluşturulamadı.", "Kaynak saptanamadı.")
+
+        eser_adi = str(bilgi.get("eser_adi", "Olası Tarihî Eser"))
+        guven = str(bilgi.get("guven", "Güven düzeyi belirlenemedi."))
+
+        genel = (
+            f"# 🏛️ {eser_adi}\n\n"
+            f"**Tahmini Güven Düzeyi:** {guven}\n\n"
+            f"### 📝 Genel Tanıtım\n"
+            f"{bilgi.get('genel_bakis', 'Bilgi bulunamadı.')}\n\n"
+            f"### 🌟 Tarihsel Önemi\n"
+            f"{bilgi.get('tarihsel_onem', 'Bilgi bulunamadı.')}"
         )
 
-        if response.status_code != 200:
-            try:
-                error = response.json()["error"]["message"]
-            except Exception:
-                error = response.text[:500]
-
-            return (
-                f"API HATASI ({response.status_code})\n\n"
-                f"{error}"
-            )
-
-        data = response.json()
-        candidates = data.get("candidates", [])
-
-        if not candidates:
-            return "Yapay zekâ yanıt oluşturamadı. Başka bir fotoğraf dene."
-
-        parts = candidates[0].get("content", {}).get("parts", [])
-
-        answer = "\n\n".join(
-            part["text"]
-            for part in parts
-            if "text" in part
+        tarihce = (
+            f"## 📜 Dönem, Uygarlık ve Tarihçe\n\n"
+            f"{bilgi.get('tarihce', 'Yeterli bilgi bulunamadı.')}"
         )
 
-        if not answer:
-            return "Yanıt boş geldi. Lütfen tekrar dene."
-
-        return (
-            "# 🏺 ESER ANALİZİ\n\n"
-            + answer
-            + "\n\n---\n"
-            + "*Bu sonuç yapay zekâ değerlendirmesidir. "
-              "Kesin tespit için güvenilir kaynaklardan doğrulama yap.*"
+        bulgular = (
+            f"## 🔎 Arkeolojik Bulgular ve Detaylar\n\n"
+            f"{bilgi.get('arkeolojik_bulgular', 'Yeterli bilgi bulunamadı.')}\n\n"
+            f"### ⚠️ Belirsizlikler ve Tartışmalar\n"
+            f"{bilgi.get('belirsizlikler', 'Bu tanımlama kesin değildir.')}"
         )
 
-    except requests.exceptions.Timeout:
-        return "İstek zaman aşımına uğradı. Tekrar dene."
+        kaynaklar = (
+            "## 📚 Önerilen Tarihsel Kaynaklar\n\n"
+            "- **UNESCO Dünya Mirası Arşivleri**\n"
+            "- **Kültür Portalı ve Bakanlık Envanterleri**\n"
+            "- **Akademik Arkeoloji Yayınları, Tez Çalışmaları ve Monografiler**\n\n"
+            "*Not: Bu analiz yapay zekâ tarafından sunulan bir ön araştırmadır. Kesin teşhis ancak yerinde arkeolojik uzman incelemeleriyle mümkündür.*"
+        )
 
-    except Exception as error:
-        return f"Beklenmeyen hata: {str(error)}"
+        return genel, tarihce, bulgular, kaynaklar
 
+    except Exception as hata:
+        mesaj = f"Hata: {type(hata).__name__} - {str(hata)[:500]}"
+        return (mesaj, "", "", "")
 
+# Tasarım ve Stil Ayarları
+css = """
+.gradio-container {
+    max-width: 1100px !important;
+    margin: auto !important;
+    background: #101114 !important;
+    color: #f5f0e6 !important;
+}
+#hero {
+    padding: 42px 22px;
+    border-radius: 22px;
+    text-align: center;
+    background: linear-gradient(135deg, #202321, #17151b, #292116);
+    border: 1px solid #806b40;
+}
+#hero h1 {
+    color: #e5c47a;
+    font-size: clamp(30px, 5vw, 48px);
+}
+.gold-line {
+    height: 2px;
+    width: 65%;
+    margin: 22px auto;
+    background: linear-gradient(90deg, transparent, #e5c47a, transparent);
+}
+button.primary {
+    background: linear-gradient(90deg, #a77b32, #e2c477) !important;
+    color: #17130b !important;
+    border: none !important;
+    font-weight: bold !important;
+}
+.panel {
+    border: 1px solid #4a4437;
+    border-radius: 14px;
+    padding: 12px;
+}
+"""
 
-with gr.Blocks(
-    theme=gr.themes.Base(
-        primary_hue="amber",
-        secondary_hue="amber",
-        neutral_hue="slate"
-    ),
-    css="""
-    body, .gradio-container {
-        background: #101114 !important;
-        color: #f2eadb !important;
-    }
-
-    .gradio-container {
-        max-width: 1100px !important;
-        margin: auto !important;
-    }
-
-    #hero {
-        text-align: center;
-        padding: 35px 15px 25px;
-        border-bottom: 1px solid #554326;
-        margin-bottom: 24px;
-    }
-
-    #hero h1 {
-        color: #d9b56d;
-        font-size: 42px;
-        letter-spacing: 3px;
-        margin-bottom: 10px;
-    }
-
-    #hero p {
-        color: #c2b9a8;
-        font-size: 16px;
-    }
-
-    #upload-panel {
-        border: 1px solid #725a32;
-        border-radius: 16px;
-        padding: 18px;
-        background: #191a1f;
-    }
-
-    #analyze {
-        background: linear-gradient(90deg, #8e672b, #d9b56d);
-        color: #111111;
-        border: none;
-        border-radius: 10px;
-        font-weight: bold;
-        min-height: 52px;
-        font-size: 16px;
-    }
-
-    #result-panel {
-        border: 1px solid #554326;
-        border-radius: 16px;
-        padding: 20px;
-        background: #17181c;
-        line-height: 1.8;
-    }
-
-    footer {
-        visibility: hidden;
-    }
-    """,
-    title="HERITAGE AI | Tarihî Eser Asistanı"
-) as demo:
-
+with gr.Blocks(title="Tarihî Eser Asistanı", css=css) as uygulama:
     gr.HTML("""
     <div id="hero">
-        <div style="color:#d9b56d;font-size:14px;
-                    letter-spacing:5px;margin-bottom:12px;">
-            HERITAGE AI
-        </div>
-        <h1>GEÇMİŞİ KEŞFET</h1>
-        <p>
-            Tarihî eserleri yapay zekâ ile incele.
-            Geçmişin izlerini fotoğraflarla keşfet.
-        </p>
-        <div style="color:#8e7852;font-size:12px;
-                    letter-spacing:2px;margin-top:18px;">
-            TARİH • ARKEOLOJİ • KÜLTÜREL MİRAS
-        </div>
+      <div style="font-size:42px">🏛️</div>
+      <h1>TARİHİN İZİNİ SÜR</h1>
+      <div class="gold-line"></div>
+      <p>Geçmişin izlerini keşfet. Eserleri tanı, tarihlerini araştır.</p>
+      <p style="font-size:12px;letter-spacing:3px">TARİH • ARKEOLOJİ • KEŞİF</p>
     </div>
     """)
 
-    with gr.Row():
-        with gr.Column(scale=1, elem_id="upload-panel"):
-            gr.Markdown("## 🏺 Eserini tanıt")
-            gr.Markdown(
-                "İncelemek istediğin eserin fotoğrafını yükle."
+    gr.Markdown("### Yeni bir keşfe hazır mısın?")
+
+    with gr.Group(elem_classes=["panel"]):
+        api_anahtar_girdisi = gr.Textbox(
+            label="Gemini API Anahtarı (Opsiyonel - Eğer yukarıda tanımlanmadıysa buraya girin)",
+            placeholder="AIzaSy...",
+            type="password",
+            value=""
+        )
+
+        fotograf_girdisi = gr.Image(
+            label="Eser fotoğrafı yükleyin",
+            type="filepath",
+            height=320
+        )
+
+        arastir_butonu = gr.Button(
+            "✦ KEŞFİ BAŞLAT",
+            variant="primary",
+            size="lg"
+        )
+
+    gr.Markdown("## Araştırma dosyası")
+
+    with gr.Tabs():
+        with gr.Tab("📜 Genel Bakış"):
+            genel_cikti = gr.Markdown(
+                "Fotoğraf yüklendikten sonra analiz ve özet burada görünecek."
             )
 
-            photo = gr.Image(
-                type="filepath",
-                label="ESER FOTOĞRAFI",
-                height=320
+        with gr.Tab("🏺 Tarihçe"):
+            tarihce_cikti = gr.Markdown(
+                "Dönem, uygarlık ve tarihsel bağlam bilgileri burada listelenecek."
             )
 
-            button = gr.Button(
-                "⌕  ESERİ İNCELE",
-                variant="primary",
-                elem_id="analyze"
+        with gr.Tab("🔎 Arkeolojik Bulgular"):
+            bulgu_cikti = gr.Markdown(
+                "Mimari bulgular, taş işçiliği ve olası belirsizlikler burada listelenecek."
             )
 
-            gr.Markdown(
-                "*Daha iyi sonuçlar için eserin net ve "
-                "aydınlık bir fotoğrafını kullan.*"
+        with gr.Tab("📚 Kaynaklar"):
+            kaynak_cikti = gr.Markdown(
+                "Önerilen tarihsel araştırma referansları burada görüntülenecek."
             )
 
-        with gr.Column(scale=1, elem_id="result-panel"):
-            gr.Markdown("## 📜 Eser analizi")
-            result = gr.Markdown(
-                "Fotoğrafını yükle ve **Eseri İncele** "
-                "düğmesine bas. Analiz burada görünecek."
-            )
-
-    gr.Markdown("""
-    ---
-    <div style="text-align:center;color:#a69b87;">
-        HERITAGE AI · TARİHÎ ESER ARAŞTIRMA PLATFORMU
-
-        <br><br>
-        Yapay zekâ sonuçları tahmin içerebilir.
-        Kesin tarih ve kimlik için güvenilir kaynaklardan doğrulama yap.
-    </div>
-    """)
-
-    button.click(
-        fn=eseri_incele,
-        inputs=photo,
-        outputs=result
+    arastir_butonu.click(
+        fn=eser_ara,
+        inputs=[fotograf_girdisi, api_anahtar_girdisi],
+        outputs=[genel_cikti, tarihce_cikti, bulgu_cikti, kaynak_cikti],
+        show_progress="full"
     )
 
-demo.launch(
-    server_name="0.0.0.0",
-    server_port=int(os.environ.get("PORT", 10000))
-)
+uygulama.launch(share=True)
