@@ -1,23 +1,30 @@
 
-%pip -q install -U gradio requests pillow
-
-import gradio as gr
-import requests
+import os
+import io
 import json
 import base64
 import time
-import io
 import re
+
+import gradio as gr
+import requests
 from PIL import Image
 
-# Ortamda tanımlı bir global anahtar var mı kontrol et
-global_anahtar = globals().get("anahtar", "")
+
+# Render ortam değişkenlerinden API anahtarını al.
+GLOBAL_ANAHTAR = os.environ.get("GEMINI_API_KEY", "")
 
 
 def gemini_istegi(govde, api_key):
-    """Geçici sunucu hatalarında Gemini isteğini tekrar dener."""
-    aktif_model = "models/gemini-3.8-flash"
-    adres = f"https://generativelanguage.googleapis.com/v1beta/{aktif_model}:generateContent"
+    """Gemini API isteğini yapar ve geçici hatalarda tekrar dener."""
+
+    model = "gemini-3.8-flash"
+    adres = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{model}:generateContent"
+    )
+
+    son_hata = None
 
     for deneme in range(4):
         try:
@@ -27,103 +34,118 @@ def gemini_istegi(govde, api_key):
                 json=govde,
                 timeout=90
             )
-        except requests.RequestException:
-            if deneme < 3:
-                time.sleep(2 ** (deneme + 1))
-                continue
-            raise RuntimeError(
-                "Gemini sunucusuna bağlanılamadı. Biraz sonra tekrar dene."
+
+            if cevap.status_code == 200:
+                return cevap.json()
+
+            son_hata = (
+                f"Gemini HTTP {cevap.status_code}: "
+                f"{cevap.text[:700]}"
             )
 
-        if cevap.status_code == 200:
-            return cevap.json()
+            if cevap.status_code not in [429, 500, 502, 503, 504]:
+                break
 
-        if cevap.status_code in [429, 500, 502, 503, 504]:
-            if deneme < 3:
-                time.sleep(2 ** (deneme + 1))
-                continue
+        except requests.RequestException as hata:
+            son_hata = f"Bağlantı hatası: {hata}"
 
-        raise RuntimeError(
-            f"Gemini HTTP {cevap.status_code}: {cevap.text[:700]}"
-        )
+        if deneme < 3:
+            time.sleep(2 ** (deneme + 1))
 
-    raise RuntimeError("Gemini isteği tamamlanamadı.")
+    raise RuntimeError(
+        son_hata or "Gemini isteği tamamlanamadı."
+    )
 
 
 def eser_ara(fotograf_yolu, kullanici_anahtari):
+    """Fotoğrafı analiz eder ve dört bölümde sonuç döndürür."""
+
     api_key = (
         kullanici_anahtari.strip()
-        if kullanici_anahtari
-        else global_anahtar
+        if kullanici_anahtari and kullanici_anahtari.strip()
+        else GLOBAL_ANAHTAR
     )
 
     if not api_key:
-        return (
-            "HATA: Gemini API anahtarı bulunamadı! "
-            "Lütfen aşağıdaki alana API anahtarınızı girin.",
-            "Anahtar Eksik",
-            "Anahtar Eksik",
-            "Anahtar Eksik"
+        mesaj = (
+            "### API anahtarı bulunamadı\n\n"
+            "Gemini API anahtarını yukarıdaki alana gir "
+            "ve yeniden dene."
         )
+        return mesaj, "", "", ""
 
     if not fotograf_yolu:
         return (
-            "Lütfen bir fotoğraf yükleyin.",
-            "Henüz bilgi yok.",
-            "Henüz bilgi yok.",
-            "Henüz kaynak yok."
+            "Lütfen önce bir eser fotoğrafı yükle.",
+            "",
+            "",
+            ""
         )
 
     try:
-        # Fotoğrafı JPEG formatına dönüştür ve sıkıştır
-        with Image.open(fotograf_yolu) as im:
-            im = im.convert("RGB")
-            im.thumbnail((1200, 1200))
+        # Fotoğrafı küçült ve JPEG'e dönüştür.
+        with Image.open(fotograf_yolu) as resim:
+            resim = resim.convert("RGB")
+            resim.thumbnail((1200, 1200))
 
             tampon = io.BytesIO()
-            im.save(tampon, format="JPEG", quality=85)
+            resim.save(
+                tampon,
+                format="JPEG",
+                quality=85,
+                optimize=True
+            )
             foto_bytes = tampon.getvalue()
 
-        foto_base64 = base64.b64encode(foto_bytes).decode("utf-8")
+        foto_base64 = base64.b64encode(
+            foto_bytes
+        ).decode("utf-8")
 
         prompt = """
-Sen tarihî eserler üzerine çalışan dikkatli bir arkeoloji ve sanat tarihi uzmanısın.
-Ekli fotoğrafı görsel olarak incele.
+Sen tarihî eserler, arkeoloji ve sanat tarihi konusunda
+dikkatli bir araştırma asistanısın.
 
-Yalnızca geçerli bir JSON nesnesi döndür. Markdown kod çiti ekleme.
+Gönderilen fotoğrafı incele ve yalnızca geçerli bir JSON
+nesnesi döndür. Markdown kod çiti ekleme.
 
-Şu anahtarları içeren bir yapı oluştur:
+Şu alanları oluştur:
 
 {
   "eser_adi": "Eserin veya yapının olası adı",
   "guven": "Düşük, Orta veya Yüksek; gerekçesiyle birlikte",
-  "genel_bakis": "Eserin genel görünümü, mimari formu ve tanıtımı",
-  "tarihce": "Tahmini dönem, inşa tarihi, uygarlık ve tarihsel bağlam",
-  "arkeolojik_bulgular": "Gözlenen yapısal özellikler, malzeme, figürler ve süslemeler",
+  "genel_bakis": "Eserin görünümü, mimarisi ve tanıtımı",
+  "tarihce": "Olası dönem, uygarlık ve tarihsel bağlam",
+  "arkeolojik_bulgular": "Görülebilen yapı özellikleri,
+  malzemeler, figürler ve süslemeler",
   "tarihsel_onem": "Kültürel, sanatsal ve tarihsel önem",
-  "belirsizlikler": "Alternatif olasılıklar ve kesin saptanamayan ayrıntılar"
+  "belirsizlikler": "Alternatif olasılıklar ve bilinmeyenler"
 }
 
-KURALLAR:
-- Türkçe yaz ve her bölümü ayrıntılı açıkla.
-- Tahminleri kesin gerçekler gibi sunma.
-- Fotoğrafta görünmeyen arkeolojik unsurları veya konumları uydurma.
-- Eserin konumu kesin bilinmiyorsa bunu açıkça belirt.
-- Tarihsel bilgileri görselden kesin biçimde çıkaramayacağını belirt.
+Kurallar:
+- Türkçe yaz ve her bölümü açıklayıcı biçimde doldur.
+- Tahminleri kesin bilgi gibi sunma.
+- Fotoğrafta görünmeyen ayrıntıları uydurma.
+- Konum kesin değilse bunu açıkça belirt.
+- Yalnızca fotoğraftan kesin tarih veya kimlik
+  belirlenemeyebileceğini açıkla.
+- Eserin adını belirlerken görsel kanıtlara dayan.
+- Bilmediğin bilgileri açıkça belirt.
 """
 
         govde = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": foto_base64
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": foto_base64
+                            }
                         }
-                    }
-                ]
-            }],
+                    ]
+                }
+            ],
             "generationConfig": {
                 "temperature": 0.35,
                 "responseMimeType": "application/json"
@@ -135,18 +157,33 @@ KURALLAR:
 
         if not adaylar:
             return (
-                "Yapay zekâ yanıt üretemedi.",
+                "Yapay zekâ yanıt üretemedi. "
+                "Farklı bir fotoğraf deneyebilirsin.",
                 "",
                 "",
                 ""
             )
 
-        metin = adaylar[0].get(
+        parcalar = adaylar[0].get(
             "content", {}
-        ).get("parts", [{}])[0].get("text", "").strip()
+        ).get("parts", [])
 
+        metin = "".join(
+            parca.get("text", "")
+            for parca in parcalar
+        ).strip()
+
+        if not metin:
+            return (
+                "Gemini boş yanıt verdi. Lütfen tekrar dene.",
+                "",
+                "",
+                ""
+            )
+
+        # Olası Markdown kod çitlerini temizle.
         metin_temiz = re.sub(
-            r"^```(?:json)?\s*|\s*```$",
+            r"^\s*```(?:json)?\s*|\s*```\s*$",
             "",
             metin,
             flags=re.IGNORECASE
@@ -156,25 +193,25 @@ KURALLAR:
             bilgi = json.loads(metin_temiz)
         except json.JSONDecodeError:
             return (
-                f"### Araştırma Dosyası\n\n{metin_temiz}",
-                "Ayrı tarihçe oluşturulamadı.",
-                "Ayrı bulgu oluşturulamadı.",
-                "Kaynak saptanamadı."
+                "## Araştırma Dosyası\n\n" + metin_temiz,
+                "Yanıt JSON biçiminde çözümlenemedi.",
+                "Ayrı bulgu bölümü oluşturulamadı.",
+                "Kaynaklar ayrıca doğrulanmalıdır."
             )
 
         eser_adi = str(
             bilgi.get("eser_adi", "Olası Tarihî Eser")
         )
         guven = str(
-            bilgi.get("guven", "Güven düzeyi belirlenemedi.")
+            bilgi.get("guven", "Belirlenemedi")
         )
 
         genel = (
             f"# 🏛️ {eser_adi}\n\n"
-            f"**Tahmini Güven Düzeyi:** {guven}\n\n"
-            f"### 📝 Genel Tanıtım\n"
+            f"**Güven düzeyi:** {guven}\n\n"
+            "### 📝 Genel Tanıtım\n\n"
             f"{bilgi.get('genel_bakis', 'Bilgi bulunamadı.')}\n\n"
-            f"### 🌟 Tarihsel Önemi\n"
+            "### 🌟 Tarihsel Önemi\n\n"
             f"{bilgi.get('tarihsel_onem', 'Bilgi bulunamadı.')}"
         )
 
@@ -185,29 +222,36 @@ KURALLAR:
 
         bulgular = (
             "## 🔎 Arkeolojik Bulgular ve Detaylar\n\n"
-            f"{bilgi.get('arkeolojik_bulgular', 'Yeterli bilgi bulunamadı.')}\n\n"
-            "### ⚠️ Belirsizlikler ve Tartışmalar\n"
-            f"{bilgi.get('belirsizlikler', 'Bu tanımlama kesin değildir.')}"
+            f"{bilgi.get('arkeolojik_bulgular', 'Bilgi bulunamadı.')}\n\n"
+            "### ⚠️ Belirsizlikler\n\n"
+            f"{bilgi.get('belirsizlikler', 'Kesinlik belirlenemedi.')}"
         )
 
         kaynaklar = (
-            "## 📚 Önerilen Tarihsel Kaynaklar\n\n"
-            "- **UNESCO Dünya Mirası Arşivleri**\n"
-            "- **Kültür Portalı ve Bakanlık Envanterleri**\n"
-            "- **Akademik Arkeoloji Yayınları ve Tez Çalışmaları**\n\n"
-            "*Not: Bu analiz yapay zekâ tarafından oluşturulan "
-            "bir ön araştırmadır. Önerilen kurumlar doğrudan "
-            "doğrulanmış kaynaklar anlamına gelmez.*"
+            "## 📚 Araştırma Kaynakları\n\n"
+            "- [UNESCO Dünya Mirası](https://whc.unesco.org/)\n"
+            "- [Türkiye Kültür Portalı](https://www.kulturportali.gov.tr/)\n"
+            "- [DergiPark Akademik Yayınları](https://dergipark.org.tr/)\n\n"
+            "*Bunlar araştırmaya başlamak için önerilen kaynaklardır. "
+            "Bu eserle ilgili bilgilerin bu kaynaklarda doğrulandığı "
+            "anlamına gelmez. Eserin adı ve tarihi ayrıca "
+            "kaynaklar üzerinden kontrol edilmelidir.*"
         )
 
         return genel, tarihce, bulgular, kaynaklar
 
     except Exception as hata:
-        mesaj = f"Hata: {type(hata).__name__} - {str(hata)[:500]}"
+        mesaj = (
+            f"### Analiz sırasında hata oluştu\n\n"
+            f"`{type(hata).__name__}: {str(hata)[:500]}`\n\n"
+            "API anahtarını, bağlantıyı ve Render günlüklerini "
+            "kontrol et."
+        )
         return mesaj, "", "", ""
 
 
-# Tasarım ve stil ayarları
+# ---------------- TASARIM ----------------
+
 css = """
 .gradio-container {
     max-width: 1100px !important;
@@ -216,14 +260,18 @@ css = """
     color: #f5f0e6 !important;
 }
 
-/* Ana başlık */
+body {
+    background: #101114 !important;
+}
+
 #hero {
     padding: 42px 22px;
     border-radius: 22px;
     text-align: center;
-    background: linear-gradient(135deg, #202321, #17151b, #292116);
+    background: linear-gradient(
+        135deg, #202321, #17151b, #292116
+    );
     border: 1px solid #806b40;
-    position: relative;
 }
 
 #hero h1 {
@@ -235,47 +283,29 @@ css = """
     height: 2px;
     width: 65%;
     margin: 22px auto;
-    background: linear-gradient(90deg, transparent, #e5c47a, transparent);
+    background: linear-gradient(
+        90deg, transparent, #e5c47a, transparent
+    );
 }
 
-/* Altın renkli buton */
 button.primary {
-    background: linear-gradient(90deg, #a77b32, #e2c477) !important;
+    background: linear-gradient(
+        90deg, #a77b32, #e2c477
+    ) !important;
     color: #17130b !important;
     border: none !important;
     font-weight: bold !important;
 }
 
-/* Paneller */
 .panel {
     border: 1px solid #4a4437;
     border-radius: 14px;
     padding: 12px;
 }
 
-/* Türk bayrağı: sağ üst köşe */
-#turk-bayragi {
-    position: fixed !important;
-    top: 18px !important;
-    right: 22px !important;
-    width: 68px !important;
-    height: auto !important;
-    z-index: 99999 !important;
-    border: 1px solid #e5c47a;
-    border-radius: 4px;
-    box-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
-    pointer-events: none;
-}
-
 @media (max-width: 600px) {
-    #turk-bayragi {
-        width: 45px !important;
-        top: 10px !important;
-        right: 10px !important;
-    }
-
     #hero {
-        padding: 55px 15px 30px;
+        padding: 65px 15px 30px;
     }
 }
 """
@@ -283,19 +313,50 @@ button.primary {
 
 with gr.Blocks(
     title="Tarihî Eser Asistanı",
-    css=css
+    css=css,
+    theme=gr.themes.Base(
+        primary_hue="amber",
+        neutral_hue="slate"
+    )
 ) as uygulama:
 
-    # Türk bayrağı
+    # Türk bayrağı: CSS seçicisine bağlı kalmadan sabit konum.
     gr.HTML("""
-    <img
-        id="turk-bayragi"
-        src="https://upload.wikimedia.org/wikipedia/commons/b/b4/Flag_of_Turkey.svg"
-        alt="Türk Bayrağı"
-    >
+    <div style="
+        position: fixed;
+        top: 18px;
+        right: 22px;
+        z-index: 99999;
+        pointer-events: none;
+    ">
+        <img
+            src="https://upload.wikimedia.org/wikipedia/commons/b/b4/Flag_of_Turkey.svg"
+            alt="Türk Bayrağı"
+            style="
+                display: block;
+                width: 68px;
+                height: auto;
+                border: 1px solid #e5c47a;
+                border-radius: 4px;
+                box-shadow: 0 3px 14px rgba(0,0,0,0.45);
+            "
+        >
+    </div>
+
+    <style>
+    @media (max-width: 600px) {
+        div:has(> img[alt="Türk Bayrağı"]) {
+            top: 10px !important;
+            right: 10px !important;
+        }
+
+        img[alt="Türk Bayrağı"] {
+            width: 45px !important;
+        }
+    }
+    </style>
     """)
 
-    # Karşılama alanı
     gr.HTML("""
     <div id="hero">
         <div style="font-size:42px">🏛️</div>
@@ -314,8 +375,11 @@ with gr.Blocks(
 
         api_anahtar_girdisi = gr.Textbox(
             label="Gemini API Anahtarı",
-            placeholder="AIzaSy...",
-            info="Ortamda anahtar tanımlamadıysan buraya gir.",
+            placeholder="Gemini API anahtarını gir",
+            info=(
+                "Render ortamında GEMINI_API_KEY tanımlıysa "
+                "bu alanı boş bırakabilirsin."
+            ),
             type="password",
             value=""
         )
@@ -338,22 +402,22 @@ with gr.Blocks(
 
         with gr.Tab("📜 Genel Bakış"):
             genel_cikti = gr.Markdown(
-                "Fotoğraf yüklendikten sonra analiz ve özet burada görünecek."
+                "Fotoğraf yükledikten sonra analiz burada görünecek."
             )
 
         with gr.Tab("🏺 Tarihçe"):
             tarihce_cikti = gr.Markdown(
-                "Dönem, uygarlık ve tarihsel bağlam bilgileri burada listelenecek."
+                "Dönem, uygarlık ve tarihsel bağlam burada görünecek."
             )
 
         with gr.Tab("🔎 Arkeolojik Bulgular"):
             bulgu_cikti = gr.Markdown(
-                "Mimari bulgular, taş işçiliği ve olası belirsizlikler burada listelenecek."
+                "Gözlenen mimari özellikler ve belirsizlikler burada görünecek."
             )
 
         with gr.Tab("📚 Kaynaklar"):
             kaynak_cikti = gr.Markdown(
-                "Önerilen tarihsel araştırma kaynakları burada görüntülenecek."
+                "Araştırma bağlantıları burada görünecek."
             )
 
     arastir_butonu.click(
@@ -372,4 +436,10 @@ with gr.Blocks(
     )
 
 
-uygulama.launch(share=True)
+# Render'ın verdiği portu kullan.
+PORT = int(os.environ.get("PORT", "10000"))
+
+uygulama.queue().launch(
+    server_name="0.0.0.0",
+    server_port=PORT
+)
