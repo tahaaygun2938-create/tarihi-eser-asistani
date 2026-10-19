@@ -1,8 +1,6 @@
-
 import os
 import io
 import json
-import time
 import base64
 import getpass
 import requests
@@ -37,40 +35,53 @@ if not API_KEY:
 
 def model_kontrol():
     try:
-        r = requests.get(
+        yanit = requests.get(
             f"{API_URL}/models",
             headers={"x-goog-api-key": API_KEY},
-            timeout=20
+            timeout=(5, 15)
         )
-    except requests.RequestException as e:
-        print("Model kontrolü yapılamadı:", e)
-        return
+        yanit.raise_for_status()
+        modeller = yanit.json().get("models", [])
 
-    if r.status_code != 200:
-        print("Model kontrolü uyarısı:", r.status_code)
-        return
-
-    modeller = r.json().get("models", [])
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            "Model kontrolü zaman aşımına uğradı. "
+            "İnternet bağlantını kontrol edip tekrar dene."
+        )
+    except requests.exceptions.RequestException as hata:
+        raise RuntimeError(
+            f"Gemini modelleri kontrol edilemedi: {hata}"
+        )
 
     bulunan = next(
         (
-            m for m in modeller
-            if m.get("name", "").removeprefix("models/") == MODEL_ID
+            model for model in modeller
+            if model.get("name", "").removeprefix("models/") == MODEL_ID
         ),
         None
     )
 
     if bulunan is None:
+        benzerler = [
+            model.get("name", "").removeprefix("models/")
+            for model in modeller
+            if "flash" in model.get("name", "").lower()
+        ]
+
+        liste = "\n".join(benzerler[:10]) or "Uygun model bulunamadı."
+
         raise RuntimeError(
-            f"{MODEL_ID} bu API anahtarı için listelenmiyor. "
-            "Google AI Studio'daki model erişimini kontrol et."
+            f"'{MODEL_ID}' bu API anahtarı için listelenmiyor.\n\n"
+            f"Kullanılabilir Flash modellerinden bazıları:\n{liste}\n\n"
+            "MODEL_ID değerini listelenen ve generateContent "
+            "destekleyen bir modelle değiştir."
         )
 
     if "generateContent" not in bulunan.get(
         "supportedGenerationMethods", []
     ):
         raise RuntimeError(
-            f"{MODEL_ID}, generateContent desteklemiyor."
+            f"{MODEL_ID}, generateContent özelliğini desteklemiyor."
         )
 
 
@@ -84,55 +95,54 @@ model_kontrol()
 def gemini_istegi(govde):
     url = f"{API_URL}/models/{MODEL_ID}:generateContent"
 
-    for deneme in range(2):
-        try:
-            r = requests.post(
-                url,
-                headers={
-                    "x-goog-api-key": API_KEY,
-                    "Content-Type": "application/json"
-                },
-                json=govde,
-                timeout=120
-            )
-        except requests.RequestException as e:
-            if deneme == 0:
-                time.sleep(2)
-                continue
-            raise RuntimeError(f"Bağlantı hatası: {e}")
+    try:
+        yanit = requests.post(
+            url,
+            headers={
+                "x-goog-api-key": API_KEY,
+                "Content-Type": "application/json"
+            },
+            json=govde,
+            timeout=(10, 45)
+        )
 
-        if r.status_code == 200:
-            return r.json()
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            "Gemini 45 saniye içinde yanıt vermedi. "
+            "Daha küçük bir fotoğrafla tekrar dene."
+        )
 
-        try:
-            detay = r.json().get("error", {}).get(
-                "message", r.text[:500]
-            )
-        except Exception:
-            detay = r.text[:500]
+    except requests.exceptions.RequestException as hata:
+        raise RuntimeError(f"Bağlantı hatası: {hata}")
 
-        if r.status_code == 429:
-            raise RuntimeError(
-                "Gemini API kullanım kotası dolmuş olabilir (429). "
-                "Google AI Studio'daki kullanım limitlerini kontrol et. "
-                "Bu hata için tekrar tekrar istek gönderilmeyecek.\n\n"
-                + detay
-            )
+    if yanit.status_code == 429:
+        raise RuntimeError(
+            "Gemini API kotası dolmuş veya istek sınırına ulaşılmış olabilir.\n"
+            "Google AI Studio'daki kullanım limitlerini kontrol et.\n\n"
+            + yanit.text[:700]
+        )
 
-        if r.status_code in (401, 403):
-            raise RuntimeError(
-                "API anahtarı geçersiz olabilir veya erişim "
-                "izni yok. Anahtarını ve proje ayarlarını kontrol et.\n\n"
-                + detay
-            )
+    if yanit.status_code in (401, 403):
+        raise RuntimeError(
+            "API anahtarı geçersiz olabilir veya bu modele erişim izni yok.\n\n"
+            + yanit.text[:700]
+        )
 
-        if r.status_code in (500, 502, 503, 504) and deneme == 0:
-            time.sleep(2)
-            continue
+    if yanit.status_code == 404:
+        raise RuntimeError(
+            f"Model bulunamadı: {MODEL_ID}\n\n"
+            + yanit.text[:700]
+        )
 
-        raise RuntimeError(f"Gemini HTTP {r.status_code}: {detay}")
+    if not yanit.ok:
+        raise RuntimeError(
+            f"Gemini HTTP {yanit.status_code}:\n{yanit.text[:1000]}"
+        )
 
-    raise RuntimeError("İstek tamamlanamadı.")
+    try:
+        return yanit.json()
+    except ValueError:
+        raise RuntimeError("Gemini geçerli bir JSON yanıtı döndürmedi.")
 
 
 # ==================================================
@@ -149,21 +159,24 @@ def eser_ara(fotograf):
         )
 
     try:
-        with Image.open(fotograf) as im:
-            im = im.convert("RGB")
-            im.thumbnail((1200, 1200))
+        # Fotoğrafı küçült ve API için hazırla.
+        with Image.open(fotograf) as kaynak:
+            im = kaynak.convert("RGB")
+            im.thumbnail((1000, 1000))
 
             tampon = io.BytesIO()
-            im.save(tampon, format="JPEG", quality=82)
+            im.save(tampon, format="JPEG", quality=75, optimize=True)
+
             foto_data = base64.b64encode(
                 tampon.getvalue()
             ).decode("utf-8")
 
         prompt = """
-Sen dikkatli bir arkeoloji ve sanat tarihi araştırma
-asistanısın. Fotoğrafı incele ve yalnızca geçerli JSON döndür.
+Sen dikkatli bir arkeoloji ve sanat tarihi araştırma asistanısın.
 
-JSON alanları:
+Fotoğrafı incele ve yalnızca geçerli bir JSON nesnesi döndür.
+
+Şu alanları kullan:
 {
   "eser_adi": "Olası eser adı",
   "guven": "Düşük, Orta veya Yüksek ve gerekçesi",
@@ -176,30 +189,33 @@ JSON alanları:
 
 Kurallar:
 - Türkçe yanıt ver.
-- Gözlemi tahminden ayır.
-- Emin değilsen bunu açıkça söyle.
+- Gözlemleri tahminlerden ayır.
+- Emin değilsen bunu açıkça belirt.
 - Eserin adını, tarihini veya bulunduğu yeri uydurma.
 - Fotoğraftan kesin kimlik tespiti yaptığını iddia etme.
-- Gerçek kaynaklara bakmadıysan kaynak doğruladığını söyleme.
-- Belirsizlikleri dürüstçe açıkla.
+- İncelemediğin kaynakları doğrulanmış gibi gösterme.
+- Bilinmeyen bilgileri açıkça belirt.
+- JSON dışında açıklama veya Markdown yazma.
 """
 
         govde = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": foto_data
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": foto_data
+                            }
                         }
-                    }
-                ]
-            }],
+                    ]
+                }
+            ],
             "generationConfig": {
                 "temperature": 0.2,
                 "responseMimeType": "application/json",
-                "maxOutputTokens": 2500
+                "maxOutputTokens": 1800
             }
         }
 
@@ -207,28 +223,52 @@ Kurallar:
         adaylar = sonuc.get("candidates", [])
 
         if not adaylar:
-            return (
-                "Model analiz üretemedi.",
-                "",
-                "Fotoğraf yeniden denenebilir.",
-                "Kaynak doğrulaması yapılmadı."
+            engel = sonuc.get("promptFeedback", {}).get(
+                "blockReason", "Belirtilmedi"
+            )
+            raise RuntimeError(
+                f"Model analiz sonucu üretmedi. Engel nedeni: {engel}"
             )
 
-        parcalar = adaylar[0].get("content", {}).get("parts", [])
+        aday = adaylar[0]
+        parcalar = aday.get("content", {}).get("parts", [])
+
         metin = "\n".join(
-            p.get("text", "")
-            for p in parcalar
-            if p.get("text")
+            parca.get("text", "")
+            for parca in parcalar
+            if parca.get("text")
         ).strip()
 
         if not metin:
-            raise RuntimeError("Model boş yanıt verdi.")
+            bitis = aday.get("finishReason", "Bilinmiyor")
+            raise RuntimeError(
+                f"Model boş yanıt verdi. Bitiş nedeni: {bitis}"
+            )
 
-        bilgi = json.loads(metin)
+        # Olası Markdown işaretlerini temizle.
+        if metin.startswith("```"):
+            satirlar = metin.splitlines()
+            if satirlar and satirlar[0].startswith("```"):
+                satirlar = satirlar[1:]
+            if satirlar and satirlar[-1].strip() == "```":
+                satirlar = satirlar[:-1]
+            metin = "\n".join(satirlar).strip()
+
+        try:
+            bilgi = json.loads(metin)
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                "Model yanıtı geçerli JSON biçiminde değil. "
+                "Lütfen fotoğrafı tekrar deneyin."
+            )
 
         def alan(ad, varsayilan):
             deger = bilgi.get(ad, varsayilan)
-            return str(deger).strip()
+            if deger is None:
+                return varsayilan
+            if isinstance(deger, (dict, list)):
+                return json.dumps(deger, ensure_ascii=False, indent=2)
+            return str(deger).strip() or varsayilan
 
         eser = alan("eser_adi", "Tanımlanamayan eser")
         guven = alan("guven", "Belirlenemedi")
@@ -246,9 +286,9 @@ Kurallar:
         )
 
         tarih_cikti = (
-            f"## 📜 Dönem, uygarlık ve tarihçe\n\n{tarih}\n\n"
-            "Bu tarihsel değerlendirme bağımsız kaynaklarla "
-            "doğrulanmalıdır."
+            f"## 📜 Dönem, uygarlık ve tarihçe\n\n"
+            f"{tarih}\n\n"
+            "Bu değerlendirme bağımsız kaynaklarla doğrulanmalıdır."
         )
 
         bulgu_cikti = (
@@ -259,14 +299,14 @@ Kurallar:
         kaynak_cikti = """
 ## 📚 Kaynak kontrolü
 
-Bu analiz sırasında belirli eser kayıtları bağımsız olarak
-doğrulanmadı. Aşağıdaki bağlantılar araştırmaya başlamak içindir:
+Bu analiz sırasında belirli eser kayıtları bağımsız olarak doğrulanmadı.
+Araştırmaya başlamak için aşağıdaki kaynakları kullanabilirsin:
 
 - [UNESCO Dünya Mirası Merkezi](https://whc.unesco.org/)
 - [T.C. Kültür Portalı](https://www.kulturportali.gov.tr/)
 
-Bu ana sayfalar, analiz edilen esere ait doğrulanmış kayıt
-bulunduğu anlamına gelmez.
+Bu bağlantılar, analiz edilen eserin bu kaynaklarda kayıtlı olduğunu
+tek başına kanıtlamaz.
 
 *Bu sonuç bir ön değerlendirmedir; uzman incelemesinin yerini tutmaz.*
 """
@@ -278,12 +318,12 @@ bulunduğu anlamına gelmez.
             kaynak_cikti
         )
 
-    except Exception as e:
-        hata = str(e)
-        print("ESER ANALİZ HATASI:", repr(e))
+    except Exception as hata:
+        mesaj = str(hata)
+        print("ESER ANALİZ HATASI:", repr(hata))
 
         return (
-            f"## ⚠️ Analiz tamamlanamadı\n\n{hata}",
+            f"## ⚠️ Analiz tamamlanamadı\n\n{mesaj}",
             "Tarihçe üretilemedi.",
             "Bulgular üretilemedi.",
             "Bu denemede kaynak doğrulaması yapılmadı."
@@ -325,124 +365,4 @@ css = """
     height: 2px;
     width: 65%;
     margin: 22px auto;
-    background: linear-gradient(90deg, transparent, #e5c47a, transparent);
-}
-
-#turk-bayragi {
-    position: absolute;
-    top: 18px;
-    right: 20px;
-    width: 65px;
-    border-radius: 3px;
-    box-shadow: 0 2px 10px rgba(0,0,0,.4);
-}
-
-button.primary {
-    background: linear-gradient(90deg, #a77b32, #e2c477) !important;
-    color: #17130b !important;
-    font-weight: bold !important;
-    border: none !important;
-}
-
-.panel {
-    border: 1px solid #4a4437;
-    border-radius: 14px;
-    padding: 12px;
-}
-
-@media (max-width: 600px) {
-    #turk-bayragi {
-        width: 42px;
-        top: 10px;
-        right: 10px;
-    }
-}
-"""
-
-
-# ==================================================
-# GRADIO ARAYÜZÜ
-# ==================================================
-
-with gr.Blocks(
-    title="Tarihî Eser Asistanı",
-    theme=gr.themes.Soft(),
-    css=css
-) as uygulama:
-
-    gr.HTML("""
-    <div id="hero">
-      <img id="turk-bayragi"
-           src="https://flagcdn.com/w160/tr.png"
-           alt="Türk Bayrağı">
-      <div style="font-size:42px">🏛️</div>
-      <h1>TARİHİN İZİNİ SÜR</h1>
-      <div class="gold-line"></div>
-      <p>Geçmişin izlerini keşfet. Eserleri tanı, tarihlerini araştır.</p>
-      <p style="font-size:12px;letter-spacing:3px">
-        TARİH • ARKEOLOJİ • KEŞİF
-      </p>
-    </div>
-    """)
-
-    gr.Markdown(
-        "### Yeni bir keşfe hazır mısın?\n"
-        "Bir eser fotoğrafı yükle ve araştırmayı başlat."
-    )
-
-    with gr.Group(elem_classes=["panel"]):
-        fotograf_girdisi = gr.Image(
-            label="Eser fotoğrafı",
-            type="filepath",
-            height=320
-        )
-
-        arastir_butonu = gr.Button(
-            "✦  ESERİ İNCELE",
-            variant="primary",
-            size="lg"
-        )
-
-    gr.Markdown("## Araştırma dosyası")
-
-    with gr.Tabs():
-        with gr.Tab("📜 Genel Bakış"):
-            genel_cikti = gr.Markdown(
-                "Eser tanıtımı burada görünecek."
-            )
-
-        with gr.Tab("🏺 Tarihçe"):
-            tarihce_cikti = gr.Markdown(
-                "Tarihçe burada görünecek."
-            )
-
-        with gr.Tab("🔎 Arkeolojik Bulgular"):
-            bulgu_cikti = gr.Markdown(
-                "Bulgular burada görünecek."
-            )
-
-        with gr.Tab("📚 Kaynaklar"):
-            kaynak_cikti = gr.Markdown(
-                "Kaynak kontrolü burada görünecek."
-            )
-
-    gr.Markdown(
-        "*Yapay zekâ destekli ön araştırma aracıdır. "
-        "Sonuçlar uzman doğrulamasının yerini tutmaz.*"
-    )
-
-    arastir_butonu.click(
-        fn=eser_ara,
-        inputs=[fotograf_girdisi],
-        outputs=[
-            genel_cikti,
-            tarihce_cikti,
-            bulgu_cikti,
-            kaynak_cikti
-        ],
-        show_progress="full"
-    )
-
-
-if __name__ == "__main__":
-    uygulama.queue().launch()
+    background
