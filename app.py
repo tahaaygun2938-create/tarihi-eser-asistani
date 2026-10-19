@@ -1,230 +1,287 @@
 
 import os
+import io
 import json
+import time
 import base64
+import getpass
 import requests
 import gradio as gr
-from io import BytesIO
+from PIL import Image
 
-# ==========================================
+# ==================================================
 # AYARLAR
-# ==========================================
+# ==================================================
 
-API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+API_URL = "https://generativelanguage.googleapis.com/v1beta"
+MODEL_ID = "gemini-3.5-flash-lite"
 
-API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/"
-    f"models/{MODEL}:generateContent"
-)
+API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-# ==========================================
-# SADE KOYU TEMA
-# ==========================================
+if not API_KEY:
+    try:
+        API_KEY = getpass.getpass(
+            "Gemini API anahtarını gir: "
+        ).strip()
+    except Exception:
+        API_KEY = ""
 
-CSS = """
-.gradio-container {
-    max-width: 1100px !important;
-    margin: auto !important;
-}
+# ==================================================
+# MODEL KONTROLÜ
+# ==================================================
 
-#main-title {
-    text-align: center;
-    padding: 12px 0 20px 0;
-}
-
-#main-title h1 {
-    font-size: 29px;
-    font-weight: 600;
-    margin-bottom: 6px;
-}
-
-#main-title p {
-    color: #aaaaaa;
-    font-size: 14px;
-}
-
-footer {
-    display: none !important;
-}
-"""
-
-HEADER = """
-<div id="main-title">
-    <h1>🇹🇷 Tarihinİzi</h1>
-    <p>Tarihî eserleri keşfet, geçmişin izini sür.</p>
-</div>
-"""
-
-# ==========================================
-# ESER ANALİZ TALİMATI
-# ==========================================
-
-PROMPT = """
-Sen tarih, arkeoloji, sanat tarihi ve kültürel miras
-alanlarında uzman bir araştırma asistanısın.
-
-Kullanıcının yüklediği görseli ayrıntılı olarak incele.
-Yanıtı Türkçe hazırla ve yalnızca geçerli JSON döndür.
-
-ÖNEMLİ KURALLAR:
-- Görselde olmayan ayrıntıları uydurma.
-- Kimlik tespiti kesin değilse olası seçenekleri belirt.
-- Tahminleri doğrulanmış bilgilerden ayır.
-- Kesin tarih, buluntu yeri, müze numarası veya kaynak uydurma.
-- Görseldeki yazıları ve sembolleri yalnızca seçilebildikleri ölçüde yorumla.
-- Görselden anlaşılamayan boyut ve malzeme hakkında kesin konuşma.
-- Bilgi eksikse bunu açıkça yaz.
-- Genel bilgiler vermekle yetinme; görseldeki ayrıntıları da değerlendir.
-- Kaynaklar gerçek ve ilgili kurumlar olmalı. Belirli bir kayıt
-  doğrulanmadıysa bunu açıkça belirt.
-- Fotoğrafa bakarak eserin orijinalliğini kesinleştirme.
-
-Aşağıdaki alanları içeren JSON nesnesi döndür:
-
-{
-  "kimlik": "Eserin adı veya olası tanımı",
-  "guven": "Kimlik tespitinin güven düzeyi ve gerekçesi",
-  "ozet": "Eserin ayrıntılı tanıtımı",
-  "fiziksel": "Görseldeki biçim, renk, yüzey ve malzeme izleri",
-  "donem": "Olası dönem ve tarihlendirme gerekçesi",
-  "medeniyet": "Olası medeniyet ve kültürel çevre",
-  "cografya": "Olası coğrafi köken ve belirsizlikler",
-  "yapim": "Üretim tekniği ve işçilik",
-  "sanat": "Sanat üslubu, motifler, bezemeler ve kompozisyon",
-  "semboller": "Semboller ve olası anlamları",
-  "yazi": "Yazıtlar, alfabe ve okunabilen metin",
-  "amac": "Muhtemel kullanım amacı",
-  "toplum": "Toplumsal hayatla ilişkisi",
-  "din": "Varsa dinî veya törensel bağlam",
-  "siyaset": "Varsa siyasi veya askerî bağlam",
-  "ekonomi": "Ticaret ve ekonomik hayatla ilişkisi",
-  "tarih": "Tarihsel bağlam ve önemi",
-  "arkeoloji": "Arkeolojik açıdan değerlendirme",
-  "benzerlikler": "Benzer eserlerle karşılaştırma",
-  "korunma": "Fotoğrafta görülebilen korunma durumu",
-  "belirsizlik": "Kesin olarak belirlenemeyen noktalar",
-  "dogrulama": "Kimliği doğrulamak için gereken ek kanıtlar",
-  "kaynaklar": [
-    {
-      "ad": "Kurum veya katalog adı",
-      "adres": "Bilinen resmî adres; bilinmiyorsa boş bırak",
-      "aciklama": "Kaynağın hangi bilgiyi doğrulayabileceği"
-    }
-  ]
-}
-
-JSON dışında metin yazma.
-"""
-
-# ==========================================
-# YARDIMCI FONKSİYONLAR
-# ==========================================
-
-def encode_image(image):
-    buffer = BytesIO()
-    image.convert("RGB").save(buffer, format="JPEG", quality=88)
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-
-def parse_json(text):
-    text = text.strip()
-
-    if text.startswith("```"):
-        lines = text.splitlines()
-
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        text = "\n".join(lines).strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-
-    if start == -1 or end == -1:
-        raise ValueError("JSON yanıtı bulunamadı.")
-
-    return json.loads(text[start:end + 1])
-
-
-def show_section(title, value):
-    value = str(value or "Bu konuda yeterli bilgi belirlenemedi.")
-    return f"## {title}\n\n{value}"
-
-
-def format_sources(sources):
-    if isinstance(sources, str):
-        return sources or "Doğrulanmış kaynak bilgisi bulunamadı."
-
-    if not isinstance(sources, list) or not sources:
-        return "Doğrulanmış kaynak bilgisi bulunamadı."
-
-    result = []
-
-    for source in sources:
-        if isinstance(source, dict):
-            name = source.get("ad", "Kaynak")
-            description = source.get("aciklama", "")
-            address = str(source.get("adres", "")).strip()
-
-            item = f"### {name}\n\n{description}"
-
-            if address.startswith(("https://", "http://")):
-                item += f"\n\n[Kaynağı aç]({address})"
-
-            result.append(item)
-        else:
-            result.append(str(source))
-
-    return "\n\n".join(result)
-
-
-# ==========================================
-# ANALİZ
-# ==========================================
-
-def analyze_artifact(image, extra_info):
-    empty = ("", "", "", "", "", "", "", "")
-
-    if image is None:
-        return ("Önce bir eser fotoğrafı yükle.",) + empty[1:]
-
+def model_kontrol():
     if not API_KEY:
-        return (
-            "API anahtarı bulunamadı. Render Environment bölümünde "
-            "GEMINI_API_KEY değişkenini tanımlamalısın."
-        ) + empty[1:]
+        print(
+            "UYARI: GEMINI_API_KEY bulunamadı. "
+            "Uygulama açılabilir ancak analiz yapılamaz."
+        )
+        return
 
     try:
-        encoded = encode_image(image)
+        r = requests.get(
+            f"{API_URL}/models",
+            headers={"x-goog-api-key": API_KEY},
+            timeout=20
+        )
 
-        extra_info = (extra_info or "").strip()
-        if not extra_info:
-            extra_info = "Ek bilgi verilmedi."
+        if r.status_code != 200:
+            print("Model kontrolü uyarısı:", r.status_code)
+            return
 
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": (
-                                PROMPT
-                                + "\n\nKullanıcının ek bilgisi:\n"
-                                + extra_info
-                            )
-                        },
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": encoded
-                            }
+        modeller = r.json().get("models", [])
+
+        bulunan = next(
+            (
+                m for m in modeller
+                if m.get("name", "").removeprefix("models/")
+                == MODEL_ID
+            ),
+            None
+        )
+
+        if bulunan is None:
+            print(
+                f"UYARI: {MODEL_ID} listede görünmüyor. "
+                "API anahtarının erişimini ve model adını kontrol et."
+            )
+        elif "generateContent" not in bulunan.get(
+            "supportedGenerationMethods", []
+        ):
+            print(
+                f"UYARI: {MODEL_ID} generateContent desteklemiyor."
+            )
+
+    except requests.RequestException as e:
+        print("Model kontrolü yapılamadı:", e)
+
+
+model_kontrol()
+
+# ==================================================
+# GEMINI İSTEĞİ
+# ==================================================
+
+def gemini_istegi(govde):
+    if not API_KEY:
+        raise RuntimeError(
+            "API anahtarı bulunamadı. "
+            "Render Environment bölümüne GEMINI_API_KEY ekle."
+        )
+
+    url = f"{API_URL}/models/{MODEL_ID}:generateContent"
+
+    for deneme in range(2):
+        try:
+            r = requests.post(
+                url,
+                headers={
+                    "x-goog-api-key": API_KEY,
+                    "Content-Type": "application/json"
+                },
+                json=govde,
+                timeout=120
+            )
+        except requests.RequestException as e:
+            if deneme == 0:
+                time.sleep(2)
+                continue
+            raise RuntimeError(f"Bağlantı hatası: {e}")
+
+        if r.status_code == 200:
+            return r.json()
+
+        try:
+            detay = r.json().get("error", {}).get(
+                "message", r.text[:500]
+            )
+        except Exception:
+            detay = r.text[:500]
+
+        if r.status_code == 429:
+            raise RuntimeError(
+                "Gemini API kullanım kotası dolmuş olabilir (429).\n\n"
+                + detay
+            )
+
+        if r.status_code in (401, 403):
+            raise RuntimeError(
+                "API anahtarı geçersiz veya erişim izni yok.\n\n"
+                + detay
+            )
+
+        if r.status_code in (500, 502, 503, 504) and deneme == 0:
+            time.sleep(2)
+            continue
+
+        raise RuntimeError(
+            f"Gemini HTTP {r.status_code}: {detay}"
+        )
+
+    raise RuntimeError("İstek tamamlanamadı.")
+
+
+# ==================================================
+# JSON YANITINI OKU
+# ==================================================
+
+def json_oku(metin):
+    metin = metin.strip()
+
+    if metin.startswith("```"):
+        satirlar = metin.splitlines()
+
+        if satirlar and satirlar[0].startswith("```"):
+            satirlar = satirlar[1:]
+
+        if satirlar and satirlar[-1].strip() == "```":
+            satirlar = satirlar[:-1]
+
+        metin = "\n".join(satirlar).strip()
+
+    baslangic = metin.find("{")
+    bitis = metin.rfind("}")
+
+    if baslangic == -1 or bitis == -1:
+        raise ValueError("Geçerli bir JSON yanıtı bulunamadı.")
+
+    return json.loads(metin[baslangic:bitis + 1])
+
+
+# ==================================================
+# AYRINTILI ESER ANALİZİ
+# ==================================================
+
+def eser_ara(fotograf, ek_bilgi):
+    if fotograf is None:
+        return ("Önce bir fotoğraf yükle.", "", "", "", "", "", "", "")
+
+    try:
+        with Image.open(fotograf) as im:
+            im = im.convert("RGB")
+            im.thumbnail((1400, 1400))
+
+            tampon = io.BytesIO()
+            im.save(tampon, format="JPEG", quality=88)
+
+            foto_data = base64.b64encode(
+                tampon.getvalue()
+            ).decode("utf-8")
+
+        prompt = """
+Sen arkeoloji, tarih, sanat tarihi, epigrafi,
+nümizmatik ve kültürel miras alanlarında çalışan
+dikkatli bir araştırma asistanısın.
+
+Görevin, yüklenen fotoğraftaki nesneyi mümkün olduğunca
+ayrıntılı incelemek ve Türkçe bir analiz hazırlamaktır.
+
+ÇOK ÖNEMLİ KURALLAR:
+1. Fotoğrafta doğrudan görülen özellikleri, tarihsel
+   yorumlardan ayrı değerlendir.
+2. Eserin kimliği kesin değilse alternatif olasılıkları belirt.
+3. Görselde olmayan ayrıntıları uydurma.
+4. Tarih, medeniyet, üretim yeri ve kullanım amacı hakkındaki
+   tahminlerini gerekçeleriyle açıkla.
+5. Malzeme, yazıt, sembol veya hasar fotoğraftan anlaşılamıyorsa
+   bunu açıkça belirt.
+6. Bir nesnenin yalnızca görünüşüne bakarak orijinal olduğunu
+   veya sahte olduğunu kesin biçimde söyleme.
+7. Görseldeki yazılar okunabiliyorsa aktar; okunamıyorsa metin
+   uydurma.
+8. Benzer eserlerden söz ederken kesin eşleşme ile genel
+   benzerliği birbirinden ayır.
+9. Fotoğrafta görülen bir nesnenin gerçek müze kaydını,
+   envanter numarasını, kazı yerini veya yayınını bilmiyorsan
+   bunları uydurma.
+10. Gerçek zamanlı internet araştırması yapmadığını unutma.
+    Bir kaynağın kontrol edildiğini veya eserin o kaynakta
+    bulunduğunu iddia etme.
+11. Her alanı mümkün olduğunca bilgilendirici yaz.
+    Ancak ayrıntı üretmek için gerçeğe aykırı bilgi ekleme.
+12. Türkçe, anlaşılır ve düzenli yaz.
+
+Yalnızca aşağıdaki alanları içeren geçerli JSON döndür.
+JSON dışında açıklama yazma.
+
+{
+  "eser_adi": "Eserin olası adı veya tanımı",
+  "guven": "Düşük, orta veya yüksek; gerekçesi",
+  "genel_bakis": "Eserin ayrıntılı genel tanıtımı",
+  "gorunur_ozellikler": "Fotoğrafta doğrudan görülebilen ayrıntılar",
+  "malzeme": "Olası malzeme ve bu tahminin dayanakları",
+  "bicim": "Form, boyut izlenimi, parçalar ve fiziksel yapı",
+  "yapim_teknigi": "Muhtemel üretim ve işçilik tekniği",
+  "donem": "Olası tarih veya dönem ve gerekçesi",
+  "medeniyet": "Olası medeniyet veya kültürel çevre",
+  "cografi_koken": "Olası coğrafi köken ve belirsizlikler",
+  "tarihce": "Dönemin tarihsel koşulları ve eserle ilişkisi",
+  "sanat_ozellikleri": "Sanat üslubu, tasarım, motifler ve bezemeler",
+  "semboller": "Görülen semboller ve olası anlamları",
+  "yazi": "Yazıt, alfabe, dil ve okunabilen ifadeler",
+  "kullanim_amaci": "Muhtemel kullanım amacı ve gerekçesi",
+  "toplumsal_yasam": "Günlük yaşam, gelenekler ve toplumla ilişkisi",
+  "dini_baglam": "Varsa dinî, ritüel veya törensel bağlantı",
+  "siyasi_baglam": "Varsa yönetim, hükümdarlık veya askerî bağlantı",
+  "ekonomik_baglam": "Ticaret, para, üretim veya ekonomik hayatla ilişkisi",
+  "arkeolojik_deger": "Arkeolojik açıdan önemi ve olası araştırma soruları",
+  "benzer_eserler": "Karşılaştırılabilecek eser türleri ve benzerlik gerekçeleri",
+  "buluntu_yeri": "Biliniyorsa buluntu yeri; fotoğraftan bilinmiyorsa bunu belirt",
+  "korunma_durumu": "Fotoğraftan görülebilen aşınma, kırık veya yüzey durumu",
+  "orijinallik": "Fotoğraftan orijinalliğin neden kesinleştirilemeyeceği",
+  "alternatifler": "Diğer olası kimlikler ve bunların gerekçeleri",
+  "belirsizlikler": "Eksik kanıtlar ve yanlış tanımlama riskleri",
+  "dogrulama": "Kesin kimlik için gereken ek fotoğraf, ölçüm, yazıt veya belge",
+  "arastirma_yollari": "Eser hakkında araştırma yapılabilecek kurum ve katalog türleri"
+}
+
+Eserin belirli bir tarihsel kimliği olduğundan emin değilsen
+önce nesneyi tanımla, ardından olasılıkları gerekçelendir.
+"""
+
+        ek_bilgi = (ek_bilgi or "").strip()
+
+        if not ek_bilgi:
+            ek_bilgi = "Kullanıcı ek bilgi vermedi."
+
+        govde = {
+            "contents": [{
+                "parts": [
+                    {
+                        "text": (
+                            prompt
+                            + "\n\nKullanıcının verdiği ek bilgi:\n"
+                            + ek_bilgi
+                        )
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": foto_data
                         }
-                    ]
-                }
-            ],
+                    }
+                ]
+            }],
             "generationConfig": {
                 "temperature": 0.2,
                 "responseMimeType": "application/json",
@@ -232,222 +289,329 @@ def analyze_artifact(image, extra_info):
             }
         }
 
-        response = requests.post(
-            API_URL,
-            params={"key": API_KEY},
-            json=payload,
-            timeout=90
-        )
+        sonuc = gemini_istegi(govde)
+        adaylar = sonuc.get("candidates", [])
 
-        if response.status_code != 200:
-            try:
-                detail = response.json().get("error", {}).get(
-                    "message", response.text[:500]
+        if not adaylar:
+            return (
+                "Model analiz üretemedi.",
+                "", "", "", "", "", "",
+                "Model yanıt vermedi. Tekrar deneyebilirsin."
+            )
+
+        parcalar = adaylar[0].get(
+            "content", {}
+        ).get("parts", [])
+
+        metin = "\n".join(
+            p.get("text", "")
+            for p in parcalar
+            if p.get("text")
+        ).strip()
+
+        if not metin:
+            raise RuntimeError(
+                "Model boş yanıt verdi. Yanıt uzunluğu sınırına "
+                "ulaşılmış olabilir; tekrar dene."
+            )
+
+        bilgi = json_oku(metin)
+
+        def alan(ad, varsayilan="Bu konuda yeterli bilgi belirlenemedi."):
+            deger = bilgi.get(ad, varsayilan)
+
+            if deger is None:
+                return varsayilan
+
+            if isinstance(deger, (dict, list)):
+                return json.dumps(
+                    deger,
+                    ensure_ascii=False,
+                    indent=2
                 )
-            except Exception:
-                detail = response.text[:500]
 
-            return (
-                f"**API hatası: HTTP {response.status_code}**\n\n{detail}"
-            ) + empty[1:]
+            return str(deger).strip()
 
-        data = response.json()
-        candidates = data.get("candidates", [])
+        def bolum(baslik, anahtar):
+            return f"### {baslik}\n\n{alan(anahtar)}"
 
-        if not candidates:
-            return (
-                "Model yanıt üretmedi. API kotasını ve model erişimini kontrol et."
-            ) + empty[1:]
+        # GENEL BAKIŞ
 
-        parts = candidates[0].get("content", {}).get("parts", [])
-        answer = "\n".join(
-            part.get("text", "")
-            for part in parts
-            if part.get("text")
+        genel = (
+            f"# 🏛️ {alan('eser_adi', 'Tanımlanamayan nesne')}\n\n"
+            f"**Tahmini güven düzeyi:** {alan('guven')}\n\n"
+            f"## Genel tanıtım\n\n{alan('genel_bakis')}\n\n"
+            f"## Fotoğrafta görülen özellikler\n\n"
+            f"{alan('gorunur_ozellikler')}\n\n"
+            f"## Malzeme ve fiziksel yapı\n\n"
+            f"{alan('malzeme')}\n\n{alan('bicim')}\n\n"
+            f"## Üretim tekniği\n\n{alan('yapim_teknigi')}"
         )
 
-        if not answer:
-            return ("Model boş yanıt döndürdü. Tekrar dene.",) + empty[1:]
+        # TARİH VE MEDENİYET
 
-        result = parse_json(answer)
+        tarih = "\n\n".join([
+            bolum("Olası dönem", "donem"),
+            bolum("Medeniyet ve kültürel çevre", "medeniyet"),
+            bolum("Coğrafi köken", "cografi_koken"),
+            bolum("Tarihsel bağlam", "tarihce"),
+            bolum("Buluntu yeri", "buluntu_yeri")
+        ])
 
-        identity = (
-            f"# {result.get('kimlik', 'Eser belirlenemedi')}\n\n"
-            f"**Güven düzeyi:** {result.get('guven', 'Belirtilmedi')}\n\n"
-            f"{result.get('ozet', '')}"
+        # SANAT VE KULLANIM
+
+        sanat = "\n\n".join([
+            bolum("Sanat özellikleri", "sanat_ozellikleri"),
+            bolum("Semboller ve motifler", "semboller"),
+            bolum("Yazıt ve dil", "yazi"),
+            bolum("Kullanım amacı", "kullanim_amaci"),
+            bolum("Toplumsal yaşam", "toplumsal_yasam")
+        ])
+
+        # TARİHSEL BAĞLAM
+
+        baglam = "\n\n".join([
+            bolum("Dinî ve törensel bağlam", "dini_baglam"),
+            bolum("Siyasi ve askerî bağlam", "siyasi_baglam"),
+            bolum("Ekonomik bağlam", "ekonomik_baglam"),
+            bolum("Arkeolojik değer", "arkeolojik_deger"),
+            bolum("Benzer eserler", "benzer_eserler")
+        ])
+
+        # ELEŞTİREL İNCELEME
+
+        inceleme = "\n\n".join([
+            bolum("Korunma durumu", "korunma_durumu"),
+            bolum("Orijinallik değerlendirmesi", "orijinallik"),
+            bolum("Alternatif tanımlamalar", "alternatifler"),
+            bolum("Belirsizlikler", "belirsizlikler"),
+            bolum("Nasıl doğrulanabilir?", "dogrulama")
+        ])
+
+        # KAYNAK ARAŞTIRMASI
+
+        kaynak = (
+            "## 📚 Araştırma yolları\n\n"
+            + alan("arastirma_yollari")
+            + """
+
+### Başvurulabilecek kataloglar
+
+- [UNESCO Dünya Mirası Merkezi](https://whc.unesco.org/)
+- [T.C. Kültür Portalı](https://www.kulturportali.gov.tr/)
+- [The British Museum Collection](https://www.britishmuseum.org/collection)
+- [The Metropolitan Museum of Art Collection](https://www.metmuseum.org/art/collection)
+
+**Önemli:** Bu bağlantılar araştırmaya başlamak içindir.
+Bu analiz sırasında söz konusu kataloglarda canlı arama
+yapılmadı ve eserin bu kataloglarda bulunduğu doğrulanmadı.
+"""
         )
 
-        physical = "\n\n".join([
-            show_section("Fiziksel özellikler", result.get("fiziksel")),
-            show_section("Üretim ve işçilik", result.get("yapim")),
-            show_section("Sanat ve bezeme", result.get("sanat")),
-            show_section("Semboller", result.get("semboller")),
-            show_section("Yazıtlar", result.get("yazi"))
-        ])
-
-        history = "\n\n".join([
-            show_section("Dönem ve tarihlendirme", result.get("donem")),
-            show_section("Medeniyet", result.get("medeniyet")),
-            show_section("Coğrafi köken", result.get("cografya")),
-            show_section("Tarihsel önem", result.get("tarih"))
-        ])
-
-        context = "\n\n".join([
-            show_section("Kullanım amacı", result.get("amac")),
-            show_section("Toplumsal hayat", result.get("toplum")),
-            show_section("Dinî bağlam", result.get("din")),
-            show_section("Siyasi ve askerî bağlam", result.get("siyaset")),
-            show_section("Ekonomik bağlam", result.get("ekonomi"))
-        ])
-
-        archaeology = "\n\n".join([
-            show_section("Arkeolojik değerlendirme", result.get("arkeoloji")),
-            show_section("Benzer eserler", result.get("benzerlikler")),
-            show_section("Korunma durumu", result.get("korunma"))
-        ])
-
-        verification = "\n\n".join([
-            show_section("Belirsizlikler", result.get("belirsizlik")),
-            show_section("Doğrulama yolları", result.get("dogrulama"))
-        ])
-
-        sources = format_sources(result.get("kaynaklar"))
-
-        status = (
-            "Analiz tamamlandı. Sonuçlar görselden üretilmiş ön "
-            "değerlendirmelerdir; kesin kimlik için güvenilir katalog "
-            "veya uzman incelemesi gerekebilir."
+        durum = (
+            "Analiz tamamlandı. Sonuçlar fotoğrafa dayalı yapay zekâ "
+            "değerlendirmesidir. Kesin kimlik, tarih ve köken için "
+            "müze kataloğu veya uzman incelemesi gerekebilir."
         )
 
         return (
-            identity,
-            physical,
-            history,
-            context,
-            archaeology,
-            verification,
-            sources,
-            status
+            genel,
+            tarih,
+            sanat,
+            baglam,
+            inceleme,
+            kaynak,
+            durum
         )
 
-    except requests.exceptions.Timeout:
-        return ("İstek zaman aşımına uğradı. Tekrar dene.",) + empty[1:]
+    except Exception as e:
+        hata = str(e)
+        print("ESER ANALİZ HATASI:", repr(e))
 
-    except requests.exceptions.RequestException as error:
-        return (f"Bağlantı hatası: {error}",) + empty[1:]
-
-    except (ValueError, json.JSONDecodeError) as error:
-        return (f"Yanıt okunamadı: {error}",) + empty[1:]
-
-    except Exception as error:
         return (
-            f"Beklenmeyen hata ({type(error).__name__}): {error}"
-        ) + empty[1:]
+            f"## ⚠️ Analiz tamamlanamadı\n\n{hata}",
+            "", "", "", "", "",
+            "Hata ayrıntısı yukarıda gösterildi."
+        )
 
 
-# ==========================================
-# ARAYÜZ
-# ==========================================
+# ==================================================
+# TASARIM - KOYU VE ALTIN TEMASI KORUNDU
+# ==================================================
+
+css = """
+.gradio-container {
+    max-width: 1100px !important;
+    margin: auto !important;
+    background: #101114 !important;
+    color: #f5f0e6 !important;
+}
+
+#hero {
+    position: relative;
+    padding: 42px 22px;
+    border-radius: 22px;
+    text-align: center;
+    background: linear-gradient(135deg, #202321, #17151b, #292116);
+    border: 1px solid #806b40;
+}
+
+#hero h1 {
+    color: #e5c47a;
+    font-size: clamp(28px, 5vw, 46px);
+    text-shadow: 0 0 12px #806b40;
+}
+
+#hero p {
+    color: #e0d8c7;
+}
+
+.gold-line {
+    height: 2px;
+    width: 65%;
+    margin: 22px auto;
+    background: linear-gradient(90deg, transparent, #e5c47a, transparent);
+}
+
+#turk-bayragi {
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    width: 65px;
+    border-radius: 3px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+
+button.primary {
+    background: linear-gradient(90deg, #a77b32, #e2c477) !important;
+    color: #17130b !important;
+    font-weight: bold !important;
+    border: none !important;
+}
+
+.panel {
+    border: 1px solid #4a4437;
+    border-radius: 14px;
+    padding: 12px;
+}
+
+@media (max-width: 600px) {
+    #turk-bayragi {
+        width: 42px;
+        top: 10px;
+        right: 10px;
+    }
+}
+"""
+
+
+# ==================================================
+# GRADIO ARAYÜZÜ
+# ==================================================
 
 with gr.Blocks(
-    title="Tarihinİzi",
-    theme=gr.themes.Base(
-        primary_hue="gray",
-        neutral_hue="slate"
-    ),
-    css=CSS
-) as app:
+    title="Tarihî Eser Asistanı",
+    theme=gr.themes.Soft(),
+    css=css
+) as uygulama:
 
-    gr.HTML(HEADER)
+    gr.HTML("""
+    <div id="hero">
+      <img id="turk-bayragi"
+           src="https://flagcdn.com/w160/tr.png"
+           alt="Türk Bayrağı">
+      <div style="font-size:42px">🏛️</div>
+      <h1>TARİHİN İZİNİ SÜR</h1>
+      <div class="gold-line"></div>
+      <p>Geçmişin izlerini keşfet. Eserleri tanı, tarihlerini araştır.</p>
+      <p style="font-size:12px;letter-spacing:3px">
+        TARİH • ARKEOLOJİ • KEŞİF
+      </p>
+    </div>
+    """)
 
     gr.Markdown(
-        "Bir tarihî eser görseli yükle ve eser hakkında ayrıntılı bilgi edin."
+        "### Yeni bir keşfe hazır mısın?\n"
+        "Bir eser fotoğrafı yükle ve araştırmayı başlat."
     )
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            image_input = gr.Image(
-                label="Eser fotoğrafı",
-                type="pil",
-                height=300
+    with gr.Group(elem_classes=["panel"]):
+        fotograf_girdisi = gr.Image(
+            label="Eser fotoğrafı",
+            type="filepath",
+            height=320
+        )
+
+        ek_bilgi_girdisi = gr.Textbox(
+            label="Eser hakkında bildiklerin (isteğe bağlı)",
+            placeholder="Bulunduğu yer, tahmini dönem, üzerindeki yazılar...",
+            lines=2
+        )
+
+        arastir_butonu = gr.Button(
+            "✦ ESERİ İNCELE",
+            variant="primary",
+            size="lg"
+        )
+
+    gr.Markdown("## Araştırma dosyası")
+
+    with gr.Tabs():
+        with gr.Tab("🏛️ Genel Bakış"):
+            genel_cikti = gr.Markdown(
+                "Eser tanıtımı burada görünecek."
             )
 
-            extra_input = gr.Textbox(
-                label="Ek bilgi (isteğe bağlı)",
-                placeholder="Eserin bulunduğu yer veya bildiğin diğer bilgiler...",
-                lines=3
+        with gr.Tab("📜 Tarih ve Medeniyet"):
+            tarihce_cikti = gr.Markdown(
+                "Tarihsel bilgiler burada görünecek."
             )
 
-            analyze_button = gr.Button(
-                "Eseri İncele",
-                variant="primary"
+        with gr.Tab("🎨 Sanat ve Kullanım"):
+            sanat_cikti = gr.Markdown(
+                "Sanatsal özellikler burada görünecek."
             )
 
-            clear_button = gr.Button("Temizle")
+        with gr.Tab("🌍 Tarihsel Bağlam"):
+            baglam_cikti = gr.Markdown(
+                "Toplumsal ve tarihsel bilgiler burada görünecek."
+            )
 
-        with gr.Column(scale=2):
-            out_identity = gr.Markdown()
+        with gr.Tab("🔎 Eleştirel İnceleme"):
+            inceleme_cikti = gr.Markdown(
+                "Belirsizlikler ve doğrulama yolları burada görünecek."
+            )
 
-            with gr.Tabs():
-                with gr.Tab("Fiziksel Özellikler"):
-                    out_physical = gr.Markdown()
+        with gr.Tab("📚 Kaynaklar"):
+            kaynak_cikti = gr.Markdown(
+                "Araştırma kaynakları burada görünecek."
+            )
 
-                with gr.Tab("Tarih ve Medeniyet"):
-                    out_history = gr.Markdown()
+    durum_cikti = gr.Markdown("Hazır.")
 
-                with gr.Tab("Toplumsal Bağlam"):
-                    out_context = gr.Markdown()
-
-                with gr.Tab("Arkeoloji"):
-                    out_archaeology = gr.Markdown()
-
-                with gr.Tab("Doğrulama"):
-                    out_verification = gr.Markdown()
-
-                with gr.Tab("Kaynaklar"):
-                    out_sources = gr.Markdown()
-
-    out_status = gr.Markdown("Hazır.")
-
-    outputs = [
-        out_identity,
-        out_physical,
-        out_history,
-        out_context,
-        out_archaeology,
-        out_verification,
-        out_sources,
-        out_status
-    ]
-
-    analyze_button.click(
-        fn=analyze_artifact,
-        inputs=[image_input, extra_input],
-        outputs=outputs
-    )
-
-    clear_button.click(
-        fn=lambda: (None, "", "", "", "", "", "", "", "", ""),
-        inputs=[],
+    arastir_butonu.click(
+        fn=eser_ara,
+        inputs=[
+            fotograf_girdisi,
+            ek_bilgi_girdisi
+        ],
         outputs=[
-            image_input,
-            extra_input,
-            out_identity,
-            out_physical,
-            out_history,
-            out_context,
-            out_archaeology,
-            out_verification,
-            out_sources,
-            out_status
-        ]
+            genel_cikti,
+            tarihce_cikti,
+            sanat_cikti,
+            baglam_cikti,
+            inceleme_cikti,
+            kaynak_cikti,
+            durum_cikti
+        ],
+        show_progress="full"
     )
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
 
-    app.queue().launch(
+    uygulama.queue().launch(
         server_name="0.0.0.0",
         server_port=port
     )
