@@ -15,7 +15,9 @@ from PIL import Image
 # =====================================================
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
 
 API_URL = (
     "https://generativelanguage.googleapis.com/"
